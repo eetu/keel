@@ -199,6 +199,30 @@ describe("traefik routes", () => {
   });
 });
 
+describe("the resolver's hosts file", () => {
+  const pihole = SERVICES.find((spec) => spec.name === "pihole")!;
+  const hosts = runSetup(pihole, INSTALLATION, CATALOG)?.files?.find(
+    (file) => file.name === "hosts",
+  );
+  const lines = (hosts?.content ?? "")
+    .split("\n")
+    .filter((line) => line !== "" && !line.startsWith("#"));
+
+  it("names exactly the deployed vhosts, each pointing at the LAN address", () => {
+    const vhosts = SERVICES.filter((spec) => subdomainOf(spec) !== null);
+    expect(lines).toHaveLength(vhosts.length);
+    for (const spec of vhosts) {
+      expect(lines).toContain(`${NETWORK.lanAddress} ${subdomainOf(spec)}.${NETWORK.domain}`);
+    }
+  });
+
+  it("names nothing for an entry with subdomain: null", () => {
+    // Traefik itself: the one entry in the committed catalog with no vhost.
+    const proxy = SERVICES.find((spec) => spec.subdomain === null)!;
+    expect(lines.some((line) => line.endsWith(` ${proxy.name}.${NETWORK.domain}`))).toBe(false);
+  });
+});
+
 describe("podman networks", () => {
   it("are never Internal, pin their interface names and run no resolver", () => {
     // netavark's `Internal` severs the host too: a port published to loopback

@@ -183,6 +183,16 @@ MemoryMax=160M
 "
 `;
 
+exports[`'pihole' > renders the same hosts file 1`] = `
+"# Written by the deploy from the catalog — do not edit by hand.
+# Pi-hole's own local DNS records live in its web UI, not here.
+198.51.100.10 idm.example.test
+198.51.100.10 auth.example.test
+198.51.100.10 pihole.example.test
+198.51.100.10 vault.example.test
+"
+`;
+
 exports[`'pihole' > renders the same quadlet 1`] = `
 "[Unit]
 Description=Pi-hole: the LAN's resolver
@@ -250,7 +260,8 @@ exports[`'pihole' > renders the same route 1`] = `
 
 exports[`'pihole' > writes the same set of files 1`] = `
 "quadlet /etc/containers/systemd/pihole.container
-route /etc/traefik/dynamic/pihole.yaml"
+route /etc/traefik/dynamic/pihole.yaml
+hosts /var/lib/pihole/hosts/keel.list mode=644 restarts=false"
 `;
 
 exports[`'traefik' > prices the same caps on every profile 1`] = `

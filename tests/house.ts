@@ -11,7 +11,7 @@ import { type Installation } from "../src/config/types";
 
 export const HOUSE: Installation = {
   vault: "fixture",
-  network: { lanCidr: "198.51.100.0/24", domain: "example.test" },
+  network: { lanCidr: "198.51.100.0/24", lanAddress: "198.51.100.10", domain: "example.test" },
   mesh: {
     v4: "198.18.0.0/15",
     v6: "2001:db8:e5:1::/64",

@@ -388,6 +388,16 @@ signals. The trade is the one an OIDC client makes — reaching every service's
 loopback port means running on the host's own network stack, past the route
 allowlist and the gate both.
 
+**A LAN name is a line in a hosts file the resolver re-reads.** Pi-hole's own
+`setup` derives the record set from `catalog.services` into
+`/var/lib/pihole/hosts/keel.list`, one `<lanAddress> <subdomain>.<domain>` line
+per deployed vhost, and dnsmasq's `hostsdir` picks the file up on its own — so
+adding a vhost is a hosts line and retiring one removes it, both in the same
+deploy that changed the catalog, and the resolver never restarts either way.
+Public records (`publicDns: true`) are not yet keel's: the old repository
+created the ones that exist, and a Cloudflare provider that adopts them is
+backlog.
+
 **`merge()` refuses duplicate paths.** Two renderers writing one file is always a
 bug. Do not work around it by renaming the file.
 
@@ -752,7 +762,10 @@ or unreadable`. Where in the run it fails is deliberate: **a `SealedEnv`
 
 ## Migration status
 
-`../raspi` is authoritative for anything not listed here. Cloudflare is the only
+`../raspi` is authoritative for anything not listed here. LAN DNS is keel's own
+now, a hosts file Pi-hole's entry derives from the catalog; the public records a
+vhost also wants (`publicDns: true`) are still the old repository's, and stay
+that way until a Cloudflare provider lands here. Cloudflare is the only
 resource both repos could touch: when Pulumi takes it over, `cloudflare_dns` must
 be removed from the old repo's `DEPLOY` in the same change, because its orphan
 reaper deletes any LAN-pointing A record it does not know about.

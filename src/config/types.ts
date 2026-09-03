@@ -55,6 +55,13 @@ export type ServiceFile = {
 export type Network = {
   lanCidr: string;
   domain: string;
+  /**
+   * The LAN address every vhost resolves to: the board the proxy runs on. One
+   * per installation rather than one per host, because a name points at the
+   * proxy wherever the service behind it is deployed — Pi-hole's local records
+   * and the public A records both carry this value and nothing else.
+   */
+  lanAddress: string;
 };
 
 /** The NetBird overlay ranges. A connected peer is treated like a LAN client. */

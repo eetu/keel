@@ -30,6 +30,9 @@ export const INSTALLATION: Installation = {
 
   network: {
     lanCidr: "192.168.1.0/24",
+    // Where the proxy answers: the address every `<subdomain>.<domain>` record
+    // points at, on the LAN and in public DNS alike.
+    lanAddress: "192.168.1.2",
     domain: "example.com",
   },
 

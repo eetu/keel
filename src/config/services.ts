@@ -57,7 +57,7 @@ import {
 } from "../adapters/traefik";
 import { UNBOUND } from "./keel";
 import { LOCAL_SERVICES } from "./services.local";
-import { type ServiceSpec } from "./spec";
+import { type ServiceSpec, subdomainOf } from "./spec";
 
 // Each of these is read twice — once as the port the entry declares, once
 // inside the address that entry's server is told to bind — so it is named
@@ -73,6 +73,13 @@ const VAULTWARDEN_PORT = 8085;
  * would be a certificate nobody finds.
  */
 const KANIDM_CERT_DIR = "/etc/kanidm/certs";
+
+/**
+ * The host side of Pi-hole's own mount below, reused so the hosts file its
+ * `setup` writes for dnsmasq's `hostsdir` cannot drift from where the volume
+ * actually lands.
+ */
+const PIHOLE_DATA_DIR = "/var/lib/pihole";
 
 /**
  * The gate's name, which is also the OAuth2 client Kanidm has registered — one
@@ -439,12 +446,43 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
       // forced env value overwrites the stored setting.
       FTLCONF_webserver_api_password: "",
     },
-    mounts: ["/var/lib/pihole:/etc/pihole:Z"],
+    mounts: [`${PIHOLE_DATA_DIR}:/etc/pihole:Z`],
     // The whole LAN waits on this one, so "started" is not good enough. The
     // check is a query for Pi-hole's own name, which is the actual contract:
     // +norecurse so it tests this resolver rather than the internet behind it.
     healthCmd: "dig +norecurse +retry=0 @127.0.0.1 pi.hole",
     backup: true,
+    // It is the resolver: every deployed vhost's LAN record is a line this
+    // writes, into the directory dnsmasq's `hostsdir` watches.
+    setup: ({ installation: { network }, catalog }) => {
+      // One line per deployed service with a web surface. `publicHosts` needs
+      // nothing of its own here — every name in it already names a subdomain
+      // one of these entries claims, and only says that name should skip
+      // Traefik's allowlist, not that it resolves to something else.
+      const vhosts = catalog.services
+        .filter((spec) => subdomainOf(spec) !== null)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((spec) => `${network.lanAddress} ${subdomainOf(spec)}.${network.domain}`);
+      return {
+        files: [
+          {
+            name: "hosts",
+            path: `${PIHOLE_DATA_DIR}/hosts/keel.list`,
+            // dnsmasq re-reads `hostsdir` on change (inotify) — proven live on
+            // the board, a three-second turnaround with no reload and no
+            // restart. Restarting Pi-hole for one record would be LAN DNS
+            // downtime to add a line.
+            restarts: false,
+            content:
+              [
+                "# Written by the deploy from the catalog — do not edit by hand.",
+                "# Pi-hole's own local DNS records live in its web UI, not here.",
+                ...vhosts,
+              ].join("\n") + "\n",
+          },
+        ],
+      };
+    },
   },
 ];
 
