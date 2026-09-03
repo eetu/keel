@@ -120,6 +120,12 @@ export async function run(
         resolve({ status: code ?? 1, stdout, stderr });
       });
 
+      // An ssh that dies before it reads its stdin — a refused session, an
+      // unknown host — leaves this write with EPIPE, and the stream reports
+      // that on itself rather than on the child. Left unhandled it is an
+      // uncaught exception in the provider process, not a failed command. The
+      // exit status carries the verdict, so the write's fate says nothing.
+      child.stdin.on("error", () => undefined);
       child.stdin.end(stdin ?? "");
     });
 
