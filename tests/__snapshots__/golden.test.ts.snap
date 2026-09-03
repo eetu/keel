@@ -1,0 +1,539 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`'kanidm' > prices the same caps on every profile 1`] = `
+"[Service]
+MemoryHigh=48M
+MemoryMax=64M
+[Service]
+MemoryHigh=48M
+MemoryMax=64M
+[Service]
+MemoryHigh=48M
+MemoryMax=64M
+"
+`;
+
+exports[`'kanidm' > renders the same quadlet 1`] = `
+"[Unit]
+Description=Identity provider — the OIDC issuer everything else trusts
+After=network-online.target boot-complete.target traefik.service kanidm-cert-sync.service
+Wants=network-online.target kanidm-cert-sync.service
+
+[Container]
+ContainerName=kanidm
+Image=docker.io/kanidm/server@sha256:7c3d7ed868e91f78c24a7fb9c548876563b375a4203021b730d58369b97ad154
+Network=keel-internal.network
+PublishPort=127.0.0.1:8443:8443
+Volume=/var/lib/kanidm:/data:Z
+Volume=/etc/kanidm:/etc/kanidm:ro,Z
+Environment=KANIDM_BINDADDRESS=0.0.0.0:8443
+Environment=KANIDM_DB_PATH=/data/kanidm.db
+Environment=KANIDM_TLS_CHAIN=/etc/kanidm/certs/chain.pem
+Environment=KANIDM_TLS_KEY=/etc/kanidm/certs/key.pem
+Environment=KANIDM_ORIGIN=https://idm.example.test
+Environment=KANIDM_DOMAIN=idm.example.test
+HealthCmd=CMD /sbin/kanidmd scripting healthcheck
+HealthInterval=5s
+HealthStartPeriod=10s
+Notify=healthy
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p /var/lib/kanidm
+Slice=keel-core.slice
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`'kanidm' > renders the same route 1`] = `
+"http:
+  routers:
+    kanidm:
+      rule: "Host(\`idm.example.test\`)"
+      entryPoints:
+        - websecure
+      service: kanidm
+      middlewares:
+        - internal-only
+      tls: {}
+  services:
+    kanidm:
+      loadBalancer:
+        serversTransport: insecure-loopback
+        servers:
+          - url: "https://127.0.0.1:8443"
+"
+`;
+
+exports[`'kanidm' > writes the same set of files 1`] = `
+"quadlet /etc/containers/systemd/kanidm.container
+route /etc/traefik/dynamic/kanidm.yaml"
+`;
+
+exports[`'oauth2-proxy' > prices the same caps on every profile 1`] = `
+"[Service]
+MemoryHigh=36M
+MemoryMax=48M
+[Service]
+MemoryHigh=36M
+MemoryMax=48M
+[Service]
+MemoryHigh=36M
+MemoryMax=48M
+"
+`;
+
+exports[`'oauth2-proxy' > renders the same quadlet 1`] = `
+"[Unit]
+Description=Forward-auth gate in front of every SSO route
+After=network-online.target boot-complete.target keel-secrets.service kanidm.service
+Wants=network-online.target
+
+[Container]
+ContainerName=oauth2-proxy
+Image=quay.io/oauth2-proxy/oauth2-proxy@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
+Network=host
+Volume=/etc/oauth2-proxy:/etc/oauth2-proxy:ro,Z
+Environment=OAUTH2_PROXY_HTTP_ADDRESS=127.0.0.1:4180
+Environment=OAUTH2_PROXY_PROVIDER=oidc
+Environment=OAUTH2_PROXY_REVERSE_PROXY=true
+Environment=OAUTH2_PROXY_CLIENT_ID=oauth2-proxy
+Environment=OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR=/etc/oauth2-proxy/templates
+Environment=OAUTH2_PROXY_UPSTREAMS=static://202
+Environment=OAUTH2_PROXY_SESSION_STORE_TYPE=cookie
+Environment=OAUTH2_PROXY_COOKIE_SECURE=true
+Environment=OAUTH2_PROXY_COOKIE_HTTPONLY=true
+Environment=OAUTH2_PROXY_COOKIE_SAMESITE=lax
+Environment=OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST=true
+Environment=OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256
+Environment=OAUTH2_PROXY_USER_ID_CLAIM=preferred_username
+Environment=OAUTH2_PROXY_EMAIL_DOMAINS=*
+Environment=OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=false
+Environment=OAUTH2_PROXY_SET_XAUTHREQUEST=true
+Environment=OAUTH2_PROXY_OIDC_ISSUER_URL=https://idm.example.test/oauth2/openid/oauth2-proxy
+Environment=OAUTH2_PROXY_REDIRECT_URL=https://auth.example.test/oauth2/callback
+Environment=OAUTH2_PROXY_COOKIE_DOMAINS=.example.test
+Environment=OAUTH2_PROXY_WHITELIST_DOMAINS=.example.test
+EnvironmentFile=/etc/secrets/oauth2-proxy.env
+
+[Service]
+Slice=keel-core.slice
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`'oauth2-proxy' > renders the same route 1`] = `
+"http:
+  routers:
+    oauth2-proxy:
+      rule: "Host(\`auth.example.test\`)"
+      entryPoints:
+        - websecure
+      service: oauth2-proxy
+      middlewares:
+        - internal-only
+      tls: {}
+  services:
+    oauth2-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:4180"
+"
+`;
+
+exports[`'oauth2-proxy' > renders the same sign-in file 1`] = `
+"<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Logging in...</title></head>
+<body onload="document.forms[0].submit()">
+<form method="GET" action="https://auth.example.test/oauth2/start">
+  <input type="hidden" name="rd" value="{{.Redirect}}">
+  <noscript><button type="submit">Login with Kanidm</button></noscript>
+</form>
+</body>
+</html>
+"
+`;
+
+exports[`'oauth2-proxy' > writes the same set of files 1`] = `
+"quadlet /etc/containers/systemd/oauth2-proxy.container
+route /etc/traefik/dynamic/oauth2-proxy.yaml
+sign-in /etc/oauth2-proxy/templates/sign_in.html mode=644 restarts=true"
+`;
+
+exports[`'pihole' > prices the same caps on every profile 1`] = `
+"[Service]
+MemoryHigh=120M
+MemoryMax=160M
+[Service]
+MemoryHigh=120M
+MemoryMax=160M
+[Service]
+MemoryHigh=120M
+MemoryMax=160M
+"
+`;
+
+exports[`'pihole' > renders the same quadlet 1`] = `
+"[Unit]
+Description=Pi-hole: the LAN's resolver
+After=network-online.target boot-complete.target
+Wants=network-online.target
+
+[Container]
+ContainerName=pihole
+Image=docker.io/pihole/pihole@sha256:a29ad980775f38a8e7524a206ff9c125bc6fcfd9de8de1fc93d2de0671cc1d34
+Network=host
+Volume=/var/lib/pihole:/etc/pihole:Z
+Environment=FTLCONF_dns_upstreams=127.0.0.1#5335
+Environment=FTLCONF_dns_listeningMode=all
+Environment=FTLCONF_webserver_port=8080o,[::]:8080o
+Environment=FTLCONF_database_maxDBdays=7
+Environment=FTLCONF_webserver_api_password=
+HealthCmd=dig +norecurse +retry=0 @127.0.0.1 pi.hole
+HealthInterval=5s
+HealthStartPeriod=10s
+Notify=healthy
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p /var/lib/pihole
+Slice=keel-core.slice
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`'pihole' > renders the same route 1`] = `
+"http:
+  routers:
+    pihole:
+      rule: "Host(\`pihole.example.test\`)"
+      entryPoints:
+        - websecure
+      service: pihole
+      middlewares:
+        - internal-only
+        - oauth2-chain-pihole
+      tls: {}
+  services:
+    pihole:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+  middlewares:
+    oauth2-errors-pihole:
+      errors:
+        status:
+          - "401"
+        service: oauth2-proxy@file
+        query: "/oauth2/sign_in?rd=https%3A%2F%2Fpihole.example.test%2F"
+    oauth2-chain-pihole:
+      chain:
+        middlewares:
+          - oauth2-errors-pihole
+          - sso-auth
+"
+`;
+
+exports[`'pihole' > writes the same set of files 1`] = `
+"quadlet /etc/containers/systemd/pihole.container
+route /etc/traefik/dynamic/pihole.yaml"
+`;
+
+exports[`'traefik' > prices the same caps on every profile 1`] = `
+"[Service]
+MemoryHigh=96M
+MemoryMax=128M
+[Service]
+MemoryHigh=96M
+MemoryMax=128M
+[Service]
+MemoryHigh=96M
+MemoryMax=128M
+"
+`;
+
+exports[`'traefik' > renders the same middlewares file 1`] = `
+"http:
+  middlewares:
+    internal-only:
+      ipAllowList:
+        sourceRange:
+          - "198.51.100.0/24"
+          - "198.18.0.0/15"
+          - "2001:db8:e5:1::/64"
+    sso-auth:
+      forwardAuth:
+        address: "http://127.0.0.1:4180/oauth2/auth"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Auth-Request-User
+          - X-Auth-Request-Email
+        maxResponseBodySize: 65536
+  serversTransports:
+    insecure-loopback:
+      insecureSkipVerify: true
+"
+`;
+
+exports[`'traefik' > renders the same quadlet 1`] = `
+"[Unit]
+Description=TLS terminator and the only listener facing the LAN
+After=network-online.target boot-complete.target keel-secrets.service pihole.service
+Wants=network-online.target
+
+[Container]
+ContainerName=traefik
+Image=docker.io/library/traefik@sha256:9c2a54d87f76f5c2f5f2682c68394af92fb12c0a2686798d6462a3f84bd78eaf
+Network=host
+Volume=/etc/traefik:/etc/traefik:ro,Z
+Volume=/var/lib/traefik:/var/lib/traefik:Z
+EnvironmentFile=/etc/secrets/traefik.env
+HealthCmd=traefik healthcheck
+HealthInterval=5s
+HealthStartPeriod=10s
+Notify=healthy
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p /var/lib/traefik
+Slice=keel-core.slice
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`'traefik' > renders the same route 1`] = `null`;
+
+exports[`'traefik' > renders the same static file 1`] = `
+"global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+
+ping:
+  entryPoint: ping
+
+entryPoints:
+  ping:
+    address: "127.0.0.1:9080"
+    http:
+      aliasHeadersStrategy: delete
+  websecure:
+    address: ":443"
+    http:
+      aliasHeadersStrategy: delete
+      tls:
+        certResolver: cloudflare
+        domains:
+          - main: "example.test"
+            sans:
+              - "*.example.test"
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  cloudflare:
+    acme:
+      storage: /var/lib/traefik/acme.json
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "9.9.9.9:53"
+          - "149.112.112.112:53"
+"
+`;
+
+exports[`'traefik' > writes the same set of files 1`] = `
+"quadlet /etc/containers/systemd/traefik.container
+static /etc/traefik/traefik.yml mode=644 restarts=true
+middlewares /etc/traefik/dynamic/middlewares.yml mode=644 restarts=false"
+`;
+
+exports[`'vaultwarden' > prices the same caps on every profile 1`] = `
+"[Service]
+MemoryHigh=36M
+MemoryMax=48M
+[Service]
+MemoryHigh=36M
+MemoryMax=48M
+[Service]
+MemoryHigh=36M
+MemoryMax=48M
+"
+`;
+
+exports[`'vaultwarden' > renders the same quadlet 1`] = `
+"[Unit]
+Description=Bitwarden-compatible password server
+After=network-online.target boot-complete.target keel-secrets.service
+Wants=network-online.target
+
+[Container]
+ContainerName=vaultwarden
+Image=docker.io/vaultwarden/server@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912
+Network=keel-open.network
+PublishPort=127.0.0.1:8085:8085
+Volume=/var/lib/vaultwarden:/data:Z
+Environment=ROCKET_PORT=8085
+Environment=DOMAIN=https://vault.example.test
+Environment=SMTP_HOST=smtp.example.test
+Environment=SMTP_PORT=587
+Environment=SMTP_SECURITY=starttls
+EnvironmentFile=/etc/secrets/vaultwarden.env
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p /var/lib/vaultwarden
+Slice=keel-apps.slice
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`'vaultwarden' > renders the same route 1`] = `
+"http:
+  routers:
+    vaultwarden:
+      rule: "Host(\`vault.example.test\`)"
+      entryPoints:
+        - websecure
+      service: vaultwarden
+      middlewares:
+        - internal-only
+        - oauth2-chain-vaultwarden
+      tls: {}
+  services:
+    vaultwarden:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8085"
+  middlewares:
+    oauth2-errors-vaultwarden:
+      errors:
+        status:
+          - "401"
+        service: oauth2-proxy@file
+        query: "/oauth2/sign_in?rd=https%3A%2F%2Fvault.example.test%2F"
+    oauth2-chain-vaultwarden:
+      chain:
+        middlewares:
+          - oauth2-errors-vaultwarden
+          - sso-auth
+"
+`;
+
+exports[`'vaultwarden' > writes the same set of files 1`] = `
+"quadlet /etc/containers/systemd/vaultwarden.container
+route /etc/traefik/dynamic/vaultwarden.yaml"
+`;
+
+exports[`the certificate sync > extracts the certificate with the same script 1`] = `
+"#!/usr/bin/env python3
+import base64, json, os, sys, time
+
+ACME = "/var/lib/traefik/acme.json"
+CERT_DIR = "/etc/kanidm/certs"
+DEADLINE_SECONDS = 600
+POLL_SECONDS = 5
+
+
+def wildcard():
+    """The stored certificate whose SANs carry a wildcard, or None."""
+    try:
+        with open(ACME) as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return None
+    if not raw.strip():
+        return None
+    try:
+        acme = json.loads(raw)
+    except json.JSONDecodeError:
+        # The proxy rewrites the store in place, so a read can land mid-write.
+        return None
+    for resolver in acme.values():
+        if not isinstance(resolver, dict):
+            continue
+        for cert in resolver.get("Certificates") or []:
+            if any("*" in s for s in cert.get("domain", {}).get("sans", [])):
+                return cert
+    return None
+
+
+deadline = time.monotonic() + DEADLINE_SECONDS
+while True:
+    cert = wildcard()
+    if cert is not None:
+        os.makedirs(CERT_DIR, exist_ok=True)
+        chain_path = os.path.join(CERT_DIR, "chain.pem")
+        key_path = os.path.join(CERT_DIR, "key.pem")
+        with open(chain_path, "w") as f:
+            f.write(base64.b64decode(cert["certificate"]).decode())
+        with open(key_path, "w") as f:
+            f.write(base64.b64decode(cert["key"]).decode())
+        os.chmod(key_path, 0o600)
+        print(f"kanidm-cert-sync: wrote wildcard cert to {CERT_DIR}")
+        sys.exit(0)
+    if time.monotonic() >= deadline:
+        break
+    print(f"kanidm-cert-sync: no wildcard in {ACME} yet, waiting")
+    sys.stdout.flush()
+    time.sleep(POLL_SECONDS)
+
+print(
+    f"kanidm-cert-sync: no wildcard cert in {ACME} after {DEADLINE_SECONDS}s — "
+    "the DNS-01 challenge has not completed",
+    file=sys.stderr,
+)
+sys.exit(1)
+"
+`;
+
+exports[`the certificate sync > runs it from the same unit 1`] = `
+"[Unit]
+Description=Sync Traefik's wildcard certificate into /etc/kanidm/certs
+After=traefik.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=630
+ExecStart=/usr/bin/python3 /etc/kanidm/cert-sync.py
+"
+`;
+
+exports[`the certificate sync > watches the store with the same path unit 1`] = `
+"[Unit]
+Description=Re-sync kanidm's certificate when Traefik renews it
+
+[Path]
+PathChanged=/var/lib/traefik/acme.json
+
+[Install]
+WantedBy=multi-user.target
+"
+`;

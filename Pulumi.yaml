@@ -1,0 +1,20 @@
+name: keel
+description: Configuration layer for the keel fleet — services, routes, DNS, identity.
+runtime:
+  name: nodejs
+  options:
+    # tsx loads the program instead of Pulumi's bundled ts-node. Under ESM,
+    # ts-node hands resolution to Node, which rejects extensionless relative
+    # imports; tsx resolves them the way a bundler does, so the repo keeps one
+    # import style. `typescript: false` disables the bundled ts-node so tsx is
+    # the only thing loading the program, and `nodeargs` is how the CLI hands
+    # the flag to node — so nothing about the loader lives in anyone's shell.
+    typescript: false
+    nodeargs: "--import tsx"
+# Self-managed state in the repo's gitignored state/ directory, carried between
+# the admin's machines by Syncthing. Relative to this file, so the same project
+# file works wherever the clone lives; `PULUMI_BACKEND_URL` in the environment
+# would override it, which is the one reason to keep that variable unset.
+backend:
+  url: file://./state
+main: src/infra

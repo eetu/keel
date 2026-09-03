@@ -1,0 +1,65 @@
+// Self-hosted config for .github/workflows/renovate.yml. The workflow's own
+// cron is what decides when this runs — Monday, ahead of the image
+// workflow's Wednesday build — so nothing here schedules anything, and
+// automerge stays off: every PR waits on a human, gated by the image
+// workflow's `validate` job the way any other PR is.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  automerge: false,
+
+  // github-actions: the pins in .github/workflows/*.yml, image.yml and this
+  // repo's own renovate.yml included. On by default under config:recommended;
+  // named here so the coverage is a decision on record, not an assumption.
+  "github-actions": {
+    enabled: true,
+  },
+
+  // package.json's devDependencies — eslint, prettier, tsx, typescript,
+  // vitest, the exact-pinned `pulumi` CLI so every machine runs the same
+  // version, and the yarn release itself is a Corepack/`packageManager` bump
+  // this manager also follows. The repo vendors yarn 4 (`.yarnrc.yml`,
+  // `.yarn/releases/`); Renovate reads and writes a Berry lockfile natively,
+  // so no lockfile-specific option is needed for that alone.
+  npm: {
+    enabled: true,
+  },
+
+  // The base OS image. `image/Containerfile` already matches Renovate's
+  // default dockerfile patterns (they cover the bare name `Containerfile`,
+  // case-insensitively, not just `Dockerfile`), so this is confirmation on
+  // record rather than a gap it closes.
+  dockerfile: {
+    managerFilePatterns: ["/(^|/)Containerfile$/"],
+  },
+
+  // Service images, pinned by digest in `src/config/services.ts` as
+  // `<registry>/<repo>@sha256:<64 hex>` — no tag in the string itself, so
+  // there is nothing here for the dockerfile manager to find. A service on the
+  // `rolling` policy is deliberately not matched: its tag is resolved at deploy
+  // time, so a PR moving its pin would be describing something this repo does
+  // not decide.
+  //
+  // `src/config/installation.ts` can hold image references too (registry,
+  // non-secret config) but the committed `installation.example.ts` carries
+  // none today, so there is nothing for a second manager entry to match yet.
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^src/config/services\\.ts$/"],
+      matchStrings: [
+        'image:\\s*\\n?\\s*"(?<depName>[a-z0-9.\\-/]+)@(?<currentDigest>sha256:[0-9a-f]{64})"',
+      ],
+      datasourceTemplate: "docker",
+    },
+    // The backup's restic image, pinned the same way but assigned to a constant
+    // rather than to a `ServiceSpec` field — it is a tool the deploy layer runs,
+    // not a service it deploys, so the manager above does not see it.
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^src/config/backup\\.ts$/"],
+      matchStrings: ['"(?<depName>[a-z0-9.\\-/]+)@(?<currentDigest>sha256:[0-9a-f]{64})"'],
+      datasourceTemplate: "docker",
+    },
+  ],
+}

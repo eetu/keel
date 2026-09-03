@@ -1,0 +1,13 @@
+name: keel-itest
+description: Throwaway stack that exercises the device providers against a container.
+runtime:
+  name: nodejs
+  options:
+    # tsx loads the program instead of Pulumi's bundled ts-node. Under ESM,
+    # ts-node hands resolution to Node, which rejects extensionless relative
+    # imports; tsx resolves them the way a bundler does, so the repo keeps one
+    # import style. `nodeargs` is how the CLI hands tsx's flag to node, so
+    # nothing about the loader lives in run.sh's environment.
+    typescript: false
+    nodeargs: "--import tsx"
+main: index.ts

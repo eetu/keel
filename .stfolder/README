@@ -1,0 +1,1 @@
+Syncthing folder marker. Tracked so a fresh clone is immediately adoptable as the Syncthing folder; Syncthing only checks that the directory exists.

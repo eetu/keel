@@ -1,0 +1,42 @@
+{
+  "name": "keel",
+  "version": "0.1.0",
+  "description": "Immutable core OS image plus a Pulumi configuration layer for the Raspberry Pi fleet.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "packageManager": "yarn@4.18.0",
+  "scripts": {
+    "render": "tsx src/cli/render.ts",
+    "spec": "tsx src/cli/spec.ts",
+    "card-config": "tsx src/cli/card-config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "test": "vitest run",
+    "test:integration": "tests/integration/run.sh",
+    "validate": "yarn typecheck && yarn lint && yarn format && yarn test",
+    "card": "image/card.sh",
+    "qemu-test": "image/qemu-test.sh",
+    "pulumi": "dotenv -e .env -- pulumi",
+    "preview": "dotenv -e .env -- pulumi preview --refresh --parallel 4",
+    "deploy": "dotenv -e .env -- pulumi up --refresh --parallel 4"
+  },
+  "dependencies": {
+    "@pulumi/pulumi": "^3.150.0"
+  },
+  "devDependencies": {
+    "@anarkisti/eslint-config": "^1.0.0",
+    "@types/node": "^24.0.0",
+    "dotenv-cli": "^11.0.0",
+    "eslint": "^10.8.0",
+    "prettier": "^3.6.2",
+    "pulumi": "3.260.0",
+    "tsx": "^4.20.0",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^4.1.10"
+  }
+}

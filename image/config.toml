@@ -1,0 +1,11 @@
+# bootc-image-builder blueprint. Host-independent: one image serves every
+# board, so the only customization here is the disk layout, not an identity —
+# that arrives afterwards as keel.conf, sideloaded onto the ESP.
+#
+# The disk is laid out barely larger than its contents, because flashing is the
+# slow step and Etcher writes every block of the image — the default 10 GB is
+# mostly zeroes written at USB speed. `keel-growfs` claims the rest of the card
+# on first boot, so a small image and a large card are not in tension.
+[[customizations.filesystem]]
+mountpoint = "/"
+minsize = "2600 MiB"

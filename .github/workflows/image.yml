@@ -1,0 +1,97 @@
+name: image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Wednesday 03:00 UTC — days ahead of the device fleet's Saturday update
+    # window, so a build that breaks is visible in CI before any board tries it.
+    - cron: "0 3 * * 3"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}/keel
+  # The provenance label the build stamps on the image, named here rather than in
+  # the Containerfile for the same reason as the registry above: a fork's image
+  # points at the fork, and nobody's account is baked into everyone's metadata.
+  SOURCE_URL: https://github.com/${{ github.repository }}
+
+jobs:
+  validate:
+    name: render tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - run: yarn install --immutable
+      # The two installation-specific modules are gitignored, so this job is
+      # also the proof that a fresh clone works: copy the committed examples,
+      # which is the first step of the quickstart, and everything below runs
+      # against them and nothing else.
+      - run: cp src/config/installation.example.ts src/config/installation.ts
+      - run: cp src/config/services.local.example.ts src/config/services.local.ts
+      - run: yarn validate
+      # An image tree, from the example configuration alone. `validate` proves the
+      # invariants hold; this proves a stranger's first `yarn render` produces
+      # something — the failure it catches is a renderer that needs a value only
+      # a real installation has.
+      - run: yarn render
+      - run: test -f build/root/usr/lib/keel/profiles/index
+
+  image:
+    name: build
+    needs: validate
+    # Push to main, the weekly schedule, and a manual run publish; a pull
+    # request only ever exercises validate above, so a fork PR can never push.
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # Native aarch64 — a QEMU-emulated dnf install on a Fedora base is slow
+    # enough to time out.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - run: yarn install --immutable
+
+      # One generic image, rendered entirely from what is committed. Nothing in
+      # the tree comes from an installation — `installation.ts` is read by the
+      # Pulumi layer and the card tooling, never by a renderer — but the memory
+      # profiles price every catalog entry, so the render needs a catalog on
+      # disk. The examples are what a clone has, and the tree they produce is
+      # the artefact for every host.
+      - run: cp src/config/installation.example.ts src/config/installation.ts
+      - run: cp src/config/services.local.example.ts src/config/services.local.ts
+      - run: image/build.sh
+      - run: image/test.sh keel:latest
+
+      # The package starts private regardless of this repository's own
+      # visibility — GHCR's default for a package's first push. Public is the
+      # intended end state, so flip it by hand in the package's settings once
+      # this has pushed for the first time: the image carries no secret and no
+      # installation identity, so there is nothing here a credential protects.
+      - name: push
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" |
+            podman login ghcr.io -u '${{ github.actor }}' --password-stdin
+          podman push --digestfile /tmp/keel-latest.digest \
+            "localhost/keel:latest" "${REGISTRY}:latest"
+          podman push "localhost/keel:latest" "${REGISTRY}:sha-${GITHUB_SHA::12}"
+
+      # What a host actually runs is the digest, so print it where it can be
+      # compared against `bootc status` without guessing which build is live.
+      # skopeo would need its own install step here; podman already pushed the
+      # image and already knows the digest it pushed.
+      - name: report the digest
+        run: |
+          printf 'keel:latest digest: %s\n' "$(cat /tmp/keel-latest.digest)" |
+            tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,25 @@
+// Syncthing shares between the admin's machines exactly what git refuses to
+// carry: the per-installation Pulumi stack config, the private network
+// description, this installation's own service catalog and the golden that pins
+// what those services deploy. Everything else in this directory is git's — first
+// match wins, so the trailing * ignores all of it.
+//
+// A directory has to be listed for the files under it to be reachable, which is
+// what the bare !/src, !/src/config and !/tests lines are for: they carry the
+// directory entry, not its contents.
+//
+// Syncthing does not sync .stignore itself, which is why this file is tracked
+// in git: every clone gets the same ignore set.
+!/Pulumi.raspi.yaml
+!/src/config/all.ts
+!/src/config/hosts.ts
+!/src/config/services.local.ts
+!/src/config
+!/src
+!/tests/golden.local.test.ts
+!/tests/__snapshots__/golden.local.test.ts.snap
+!/tests/__snapshots__
+!/tests
+!/state
+!/.env
+*

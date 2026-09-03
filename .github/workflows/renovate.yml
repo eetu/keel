@@ -1,0 +1,27 @@
+name: renovate
+
+on:
+  schedule:
+    # Monday 02:00 UTC — ahead of the image workflow's own Wednesday build, so
+    # a bump lands in time to be picked up by that week's schedule if it merges.
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+jobs:
+  renovate:
+    name: dependency PRs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: renovate
+        uses: renovatebot/github-action@v46.2.4
+        env:
+          # Self-hosted Renovate autodiscovers nothing by default, so the
+          # repository it should act on has to be named explicitly.
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+        with:
+          configurationFile: renovate.json5
+          token: ${{ secrets.RENOVATE_TOKEN }}

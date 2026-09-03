@@ -1,0 +1,128 @@
+# The core OS image. Everything a host is — packages, units, policy, quadlets —
+# is in this build; nothing is configured on the box afterwards except the
+# API-backed state Pulumi owns.
+#
+# The base is pinned deliberately: this is the kernel and userspace a 1 GB board
+# has to boot, and a surprise minor is how remote access gets lost.
+ARG BASE=quay.io/fedora/fedora-bootc:43
+FROM ${BASE}
+
+# The registry's own link back to the repo that built this image — the one thing
+# worth stating even though the image itself carries no host identity. Supplied
+# by the build rather than written here: `image/build.sh` takes it from CI's own
+# repository, or failing that the checkout's remote, so a fork's image points at
+# the fork and no one's account name is baked into everyone else's metadata. A
+# build that can name neither leaves it empty, which is the honest answer — the
+# registry then links the package to no repository at all.
+ARG SOURCE_URL=""
+LABEL org.opencontainers.image.source="${SOURCE_URL}"
+
+# Weak dependencies off: on a 1 GB board every recommended-but-unused package is
+# read-only bulk in both deployments plus a larger pull on every upgrade.
+#
+# `greenboot` without `greenboot-default-health-checks`: that package puts
+# `01_repository_dns_check.sh` in required.d, which makes upstream DNS
+# reachability a rollback trigger — on the host that *is* the LAN resolver, and
+# whose egress is deliberately restricted, a transient upstream blip would
+# un-deploy a working image. The keel selftest asserts the actual contract
+# instead. Watchdog detection stays: it lives in the core package, behind
+# GREENBOOT_WATCHDOG_CHECK_ENABLED.
+#
+# `policycoreutils-python-utils` is what puts `semanage` on the box, and it pulls
+# python3 in behind it. That cost is paid deliberately: the SELinux policy store
+# lives under /var/lib/selinux, which on bootc is machine-local and scrubbed from
+# the image, so a port label cannot be applied at build time. It has to be
+# applied on each machine at boot, and `semanage` is the only thing that applies
+# it — without the package, unbound cannot bind :5335 on any enforcing host.
+#
+# The /run cleanup tolerates failure because podman bind-mounts /run/secrets and
+# /run/systemd/resolve into the build container; those are not image content and
+# cannot be removed. Swallowing the error is safe because the fatal lint below is
+# the actual gate on a clean layer.
+#
+# `restic` and `cifs-utils` are the backup's long-term home. Neither is required
+# for a snapshot to be taken — the deploy layer mounts the share through the
+# kernel's own cifs driver and runs restic from a pinned container, because a
+# board already in the field cannot be given a package — but both belong on the
+# machine: a mount helper turns a `.mount` unit into an option, and a restic on
+# PATH is what makes a restore something you can do from an ssh session on a host
+# whose services are down. Deliberately absent from `REQUIRED_BINARIES`: the
+# fleet is running images built before this line, and a selftest that demanded a
+# binary the running image cannot have would fail on every host until each is
+# updated.
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        age \
+        cifs-utils \
+        cloud-utils-growpart \
+        greenboot \
+        nftables \
+        openssh-server \
+        podman \
+        policycoreutils-python-utils \
+        restic \
+        unbound \
+        zram-generator \
+    && dnf clean all \
+    && rm -rf /var/cache/* /var/lib/dnf /var/log/* \
+    && { rm -rf /run/* || true; }
+
+# `dnf clean all` leaves its own state behind, and that matters more here than in
+# an app image: content shipped in /var is seeded from the first image and never
+# updated afterwards, the way a Docker VOLUME behaves. Left in place, dnf's cache
+# and log would be frozen on the disk for the life of the machine.
+
+# The Raspberry Pi boot chain, staged where the card build can reach it, for
+# every model the one card image boots: 3B/3B+, 4, and — best-effort, since a
+# Pi 5 has not touched this yet — 5.
+#
+# The Pi's ROM reads config.txt from the first FAT partition. On a 3 it loads
+# bootcode.bin as a second stage, which loads start.elf/fixup.dat; on a 4 the
+# ROM and SPI EEPROM do that step and load start4.elf/fixup4.dat directly; on a
+# 5 the EEPROM does everything through the kernel= line itself, so no start*.elf
+# ever lands on the card for it — the only Pi 5 artefact here is its dtb.
+# Whichever firmware blob runs, config.txt then points it at rpi-u-boot.bin as
+# its "kernel", and U-Boot provides the EFI environment that runs GRUB. This is
+# the path Fedora's own aarch64 images take and the one every working
+# bootc-on-Pi example uses; Fedora's single rpi_arm64 U-Boot build already
+# covers 3/4/5, so only the model-specific firmware and DTBs vary here.
+#
+# The firmware RPMs install into /boot/efi, which is no use here: /boot is
+# managed by ostree and image content there does not reach the disk. So the
+# files are copied into /usr, the packages are removed again, and the card
+# build lifts them out of the built image. That also keeps them out of
+# bootupd's way — it manages /boot/efi/EFI only, and has no support for Pi
+# firmware at the ESP root (coreos/bootupd#651).
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        bcm2711-firmware \
+        bcm2712-firmware \
+        bcm283x-firmware \
+        bcm2835-firmware \
+        uboot-images-armv8 \
+    && mkdir -p /usr/lib/keel/rpi \
+    && cp /boot/efi/bootcode.bin /usr/lib/keel/rpi/ \
+    && cp /boot/efi/start.elf /boot/efi/fixup.dat /usr/lib/keel/rpi/ \
+    && cp /boot/efi/bcm2710-rpi-3-b.dtb /boot/efi/bcm2710-rpi-3-b-plus.dtb /usr/lib/keel/rpi/ \
+    && cp /boot/efi/start4.elf /boot/efi/fixup4.dat /usr/lib/keel/rpi/ \
+    && cp /boot/efi/bcm2711-rpi-4-b.dtb /usr/lib/keel/rpi/ \
+    && cp /boot/efi/bcm2712-rpi-5-b.dtb /boot/efi/bcm2712d0-rpi-5-b.dtb /usr/lib/keel/rpi/ \
+    && cp /usr/share/uboot/rpi_arm64/u-boot.bin /usr/lib/keel/rpi/rpi-u-boot.bin \
+    && dnf -y remove bcm2711-firmware bcm2712-firmware bcm283x-firmware bcm2835-firmware uboot-images-armv8 \
+    && dnf clean all \
+    && rm -rf /var/cache/* /var/lib/dnf /var/log/* \
+    && rm -rf /boot/efi \
+    && { rm -rf /run/* || true; }
+# The directory goes too, not just its contents: the RPM created /boot/efi, and
+# bootc lints /boot as having to be empty in the image — ostree makes the real
+# mountpoint at install time.
+
+# The rendered tree: `yarn render` produces build/root/.
+COPY build/root/ /
+
+# `--preset-mode=enable-only` applies keel's preset without re-evaluating (and
+# potentially disabling) units the base image already settled.
+RUN systemctl preset-all --preset-mode=enable-only
+
+# Must be the final layer — it validates the image as bootc sees it. Warnings are
+# fatal so build hygiene cannot quietly accumulate; if a future base introduces a
+# warning outside this repo's control, drop the flag and record why.
+RUN bootc container lint --fatal-warnings

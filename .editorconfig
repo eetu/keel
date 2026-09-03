@@ -1,0 +1,21 @@
+# EditorConfig — https://editorconfig.org
+# Prettier reads indent_style, indent_size/tab_width, max_line_length and
+# end_of_line from here, so indentation + line width live here, not in .prettierrc.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+# Shell rendered into the image and read on a terminal — keep it 4-space.
+[*.sh]
+indent_size = 4
+
+# Markdown keeps trailing whitespace (two trailing spaces = hard line break).
+[*.md]
+trim_trailing_whitespace = false

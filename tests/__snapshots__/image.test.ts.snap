@@ -1,0 +1,1604 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`/etc/NetworkManager/conf.d/00-keel-dns.conf > renders the same bytes 1`] = `
+"mode 644
+[main]
+dns=none
+"
+`;
+
+exports[`/etc/resolv.conf > renders the same bytes 1`] = `
+"mode 644
+# Managed by keel. Pi-hole when it is up; the fallback covers the rest.
+nameserver 127.0.0.1
+nameserver 9.9.9.9
+nameserver 149.112.112.112
+options timeout:1 attempts:2
+"
+`;
+
+exports[`/etc/ssh/sshd_config > renders the same bytes 1`] = `
+"mode 644
+Port 22
+Protocol 2
+
+# Replacing the whole file drops the distro's own defaults, and on Fedora
+# this one is not optional: the build refuses 'UsePAM no' outright
+# ("not supported in this build and may cause several problems"). Without
+# PAM there is no pam_systemd session, no pam_limits, and account state is
+# evaluated by sshd's own shadow handling instead.
+UsePAM yes
+
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+# A group, so the image names no account. Which login is admitted is then a
+# property of the machine rather than of the artefact: whoever
+# keel-firstboot put in this group is who gets in, and an image shared with
+# a stranger carries no login of anyone else's. It is also what makes
+# changing the account safe — an existing member keeps working across a
+# rename, so there is no boot on which nobody can reach the board.
+AllowGroups wheel
+
+MaxAuthTries 3
+# A deploy is one ssh connection per resource, in parallel; the default
+# 10:30:100 resets the overflow mid-handshake and a refresh dies on
+# "kex_exchange_identification". Multiplexing on the client is the first
+# line of defense; this is the second, for the client that forgot.
+MaxStartups 40:30:100
+# The other throttle, for the client that multiplexes: every session then
+# rides one connection, and the default 10 refuses the rest with "Session
+# open refused by peer" — which a deploy's sixty parallel reads hit at once.
+MaxSessions 100
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 2
+UseDNS no
+AllowTcpForwarding no
+PermitTunnel no
+
+X11Forwarding no
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/libexec/openssh/sftp-server
+
+# Scoped exception to the global no above: an admin may TCP-forward, so
+# local development can tunnel to loopback-only services. That key already
+# grants shell and sudo, so the marginal risk is nil. Matched on the same
+# group as the grant above, which is the whole set of accounts that can
+# authenticate anyway.
+# Everything below this line is conditional — keep Match blocks last.
+Match Group wheel
+    AllowTcpForwarding yes
+"
+`;
+
+exports[`/etc/sudoers.d/keel-admin > renders the same bytes 1`] = `
+"mode 440
+%wheel ALL=(ALL) NOPASSWD:ALL
+"
+`;
+
+exports[`/etc/sysconfig/chronyd > renders the same bytes 1`] = `
+"mode 644
+OPTIONS="-F 2 -s"
+"
+`;
+
+exports[`/etc/sysconfig/nftables.conf > renders the same bytes 1`] = `
+"mode 644
+table inet keel {}
+flush table inet keel
+include "/usr/lib/keel/nftables/keel.nft"
+include "/etc/keel/nft.d/*.nft"
+"
+`;
+
+exports[`/etc/systemd/system/podman-auto-update.service > renders the same bytes 1`] = `
+"symlink -> /dev/null
+"
+`;
+
+exports[`/etc/systemd/system/podman-auto-update.timer > renders the same bytes 1`] = `
+"symlink -> /dev/null
+"
+`;
+
+exports[`/etc/systemd/system/systemd-hwdb-update.service > renders the same bytes 1`] = `
+"symlink -> /dev/null
+"
+`;
+
+exports[`/etc/systemd/system/systemd-resolved.service > renders the same bytes 1`] = `
+"symlink -> /dev/null
+"
+`;
+
+exports[`/etc/systemd/system/systemd-resolved-varlink.socket > renders the same bytes 1`] = `
+"symlink -> /dev/null
+"
+`;
+
+exports[`/etc/systemd/system/udisks2.service > renders the same bytes 1`] = `
+"symlink -> /dev/null
+"
+`;
+
+exports[`/etc/unbound/conf.d/keel.conf > renders the same bytes 1`] = `
+"mode 644
+server:
+    interface: 127.0.0.1
+    port: 5335
+    do-ip4: yes
+    do-ip6: no
+    do-udp: yes
+    do-tcp: yes
+
+    access-control: 127.0.0.0/8 allow
+
+    # No root-hints directive: the package's compiled-in defaults are used
+    # instead. Root servers change roughly once a decade, and the weekly
+    # image rebuild refreshes the unbound package — and whatever hints ship
+    # in it — anyway, so there is nothing here worth a build-time fetch.
+
+    # DNSSEC comes from the package's own root-auto-trust-anchor-file
+    # drop-in; declaring auto-trust-anchor-file again here conflicts with it.
+
+    hide-identity: yes
+    hide-version: yes
+
+    msg-cache-size: 8m
+    rrset-cache-size: 16m
+    cache-min-ttl: 300
+    cache-max-ttl: 86400
+
+    num-threads: 1
+    so-rcvbuf: 1m
+
+    prefetch: yes
+    prefetch-key: yes
+
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    use-caps-for-id: yes
+    val-clean-additional: yes
+
+    verbosity: 0
+    log-queries: no
+    log-replies: no
+
+    # RFC 6762 / RFC 6303 special-use zones, never recursed. Matter and
+    # Thread devices query service.arpa and .local for DNS-SD; an immediate
+    # NXDOMAIN stops border routers retrying hard enough to lose track of
+    # devices, which a SERVFAIL from failed recursion does not.
+    local-zone: "service.arpa." static
+    local-zone: "local." static
+"
+`;
+
+exports[`/usr/bin/keel-firstboot > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+# Deliberately no \`set -e\`: a partial keel.conf applies what it has, and a
+# step with nothing to do is the normal case rather than a reason to stop.
+set -u
+
+conf=/boot/efi/keel.conf
+admin=keel
+group=wheel
+ranges=/etc/keel/nft.d/10-ranges.nft
+
+# Two destinations, because they reach different readers. stdout is the
+# journal, where the detail belongs. /dev/kmsg is printk, and printk is the
+# only path from userspace to the serial console that stays open: systemd
+# stops mirroring unit output to the console once journald takes over, a
+# couple of seconds into the boot, so a board watched over a 3.3 V adapter
+# on GPIO 14/15 — or a QEMU run watching -serial — would otherwise never
+# see a word of this.
+say() {
+    printf 'keel-firstboot: %s\\n' "$1"
+    if [ -w /dev/kmsg ]; then printf 'keel-firstboot: %s\\n' "$1" > /dev/kmsg; fi
+    return 0
+}
+
+# This runs in unconfined_t, which is what lets it read the ESP at all, and
+# an unconfined process does not inherit the file type transitions the
+# targeted policy defines for the paths below — /etc/hostname is
+# hostname_etc_t, an authorized_keys file ssh_home_t. Each is restored as it
+# is written, so the labels match what a relabel would produce.
+relabel() {
+    if [ -x /usr/sbin/restorecon ]; then
+        /usr/sbin/restorecon -RF "$1" >/dev/null 2>&1
+    fi
+    return 0
+}
+
+[ -r "$conf" ] || { say "no $conf — nothing to apply"; exit 0; }
+say "reading $conf"
+
+# Shape checks, so a value from removable media is never spliced into a
+# command on trust.
+is_v4_cidr() {
+    case "$1" in
+        *[!0-9./]*) return 1 ;;
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*/[0-9]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_v6_cidr() {
+    case "$1" in
+        *[!0-9a-fA-F:./]*) return 1 ;;
+        *:*:*/[0-9]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+hostname=""
+lan4=""
+mesh4=""
+mesh6=""
+cr=$(printf '\\r')
+
+keyfile=$(mktemp) || exit 0
+trap 'rm -f "$keyfile"' EXIT
+
+# \`|| [ -n "$line" ]\` so a last line with no newline is still read: the
+# editor on the other machine decides that, and plenty do not add one.
+while IFS= read -r line || [ -n "$line" ]; do
+    # Trailing CR, from an editor that writes DOS line endings onto a FAT
+    # partition — which is most of them.
+    line=\${line%"$cr"}
+    case "$line" in
+        ""|\\#*) continue ;;
+        *=*) ;;
+        *) say "ignoring line that is not KEY=value: $line"; continue ;;
+    esac
+
+    key=\${line%%=*}
+    value=\${line#*=}
+
+    case "$key" in
+        KEEL_HOSTNAME)
+            case "$value" in
+                ""|*[!A-Za-z0-9-]*) say "ignoring KEEL_HOSTNAME '$value'" ;;
+                *) hostname=$value ;;
+            esac
+            ;;
+        KEEL_ADMIN_KEY)
+            # Repeatable: one line per key, every key that parses is
+            # admitted, so a second machine is added by adding a line.
+            case "$value" in
+                ssh-*) printf '%s\\n' "$value" >> "$keyfile" ;;
+                *) say "ignoring KEEL_ADMIN_KEY that is not an ssh key" ;;
+            esac
+            ;;
+        KEEL_LAN_CIDR)
+            if is_v4_cidr "$value"; then lan4=$value
+            else say "ignoring KEEL_LAN_CIDR '$value'"; fi
+            ;;
+        KEEL_MESH_V4)
+            if is_v4_cidr "$value"; then mesh4=$value
+            else say "ignoring KEEL_MESH_V4 '$value'"; fi
+            ;;
+        KEEL_MESH_V6)
+            if is_v6_cidr "$value"; then mesh6=$value
+            else say "ignoring KEEL_MESH_V6 '$value'"; fi
+            ;;
+        *)
+            say "ignoring unknown key $key"
+            ;;
+    esac
+done < "$conf"
+
+# --- hostname -----------------------------------------------------------
+if [ -n "$hostname" ] && [ "$(cat /etc/hostname 2>/dev/null)" != "$hostname" ]; then
+    printf '%s\\n' "$hostname" > /etc/hostname
+    relabel /etc/hostname
+    # The running kernel too, so this boot's own logs carry the name.
+    printf '%s\\n' "$hostname" > /proc/sys/kernel/hostname
+    say "hostname is $hostname"
+fi
+
+# --- the admin account --------------------------------------------------
+# The group is the grant: sshd admits it and the image's sudoers drop-in
+# gives it root, so an account outside it exists and cannot log in. Hence
+# membership is converged and not only set at creation: no account on this
+# image has a usable password, so a login prompt on a screen cannot be
+# satisfied, and this pass — reached by editing the card on any laptop and
+# rebooting — is the only thing that puts a member back.
+if ! id -u "$admin" >/dev/null 2>&1; then
+    useradd -m -G "$group" "$admin" && say "created $admin in $group"
+elif ! id -nG "$admin" 2>/dev/null | tr ' ' '\\n' | grep -qx "$group"; then
+    usermod -aG "$group" "$admin" && say "added $admin to $group"
+fi
+
+# --- the keys that get in -----------------------------------------------
+if [ -s "$keyfile" ]; then
+    home=$(getent passwd "$admin" | cut -d: -f6)
+    if [ -z "$home" ]; then
+        say "no home directory for $admin — keys not installed"
+    elif ! cmp -s "$keyfile" "$home/.ssh/authorized_keys"; then
+        mkdir -p "$home/.ssh"
+        chmod 700 "$home/.ssh"
+        chown "$admin" "$home/.ssh"
+        install -m 600 -o "$admin" "$keyfile" "$home/.ssh/authorized_keys"
+        relabel "$home/.ssh"
+        say "installed $(wc -l < "$keyfile" | tr -d ' ') admin key(s)"
+    fi
+fi
+
+# --- the ranges the packet filter admits --------------------------------
+# Re-declaring a set adds to it, so this file names ranges and restates
+# nothing: nft merges these elements into the table the image ships.
+if [ -n "$lan4" ] || [ -n "$mesh4" ] || [ -n "$mesh6" ]; then
+    mkdir -p "$(dirname "$ranges")"
+    tmp=$(mktemp "$ranges.XXXXXX") || exit 0
+    {
+        echo "table inet keel {"
+        [ -n "$lan4" ] && echo "    set lan4 { type ipv4_addr; flags interval; elements = { $lan4 } }"
+        [ -n "$mesh4" ] && echo "    set mesh4 { type ipv4_addr; flags interval; elements = { $mesh4 } }"
+        [ -n "$mesh6" ] && echo "    set mesh6 { type ipv6_addr; flags interval; elements = { $mesh6 } }"
+        echo "}"
+    } > "$tmp"
+    # The globs above check shape, not validity — nft is the real parser,
+    # and a file it rejects would fail nftables.service, a required unit,
+    # turning a typo on the card into a failed boot. Checked here instead:
+    # a bad range is a log line and a still-closed filter.
+    if ! nft -c -f "$tmp" >/dev/null 2>&1; then
+        say "ranges rejected by nft -c — not applied"
+        rm -f "$tmp"
+    elif cmp -s "$tmp" "$ranges"; then
+        rm -f "$tmp"
+    else
+        chmod 644 "$tmp"
+        mv "$tmp" "$ranges"
+        relabel "$ranges"
+        say "wrote $ranges"
+    fi
+fi
+
+exit 0
+"
+`;
+
+exports[`/usr/bin/keel-flightrecorder > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+set -eu
+
+esp=/boot/efi
+[ -d "$esp" ] || exit 0
+
+# Layouts differ on whether the ESP is mounted writable, so probe, open a
+# window only if one is needed, and put it back — a card left writable is
+# one whose bootloader an ordinary process can rewrite.
+opened=""
+if ! touch "$esp/.keel-writable" 2>/dev/null; then
+    mount -o remount,rw "$esp" || mount -o remount,rw /boot
+    opened=1
+fi
+rm -f "$esp/.keel-writable"
+
+close_esp() {
+    if [ -n "$opened" ]; then
+        sync
+        mount -o remount,ro "$esp" 2>/dev/null || mount -o remount,ro /boot || true
+    fi
+}
+trap close_esp EXIT
+
+# Rotate first: the previous boot's log is the interesting one when a
+# board is looping. An if, not \`test && mv\`, which under set -e would end
+# the script on the first boot, when there is nothing to rotate.
+if [ -f "$esp/keel-boot.log" ]; then
+    mv -f "$esp/keel-boot.log" "$esp/keel-boot.prev.log"
+fi
+
+# Set inside the block below and read after it: a \`{ }\` group is not a
+# subshell, so the assignments survive to decide whether the full journal
+# gets appended.
+bad=0
+
+{
+    echo "=== keel boot log: $(date -Is)"
+    echo "=== bootc status"
+    bootc status 2>&1 || echo "(bootc status failed)"
+    echo
+    echo "=== failed units"
+    # \`x=$(cmd) || true\` is the set -e-safe way to capture output from a
+    # command allowed to fail; the bare \`||\` on its own protects the
+    # assignment without needing an if/else.
+    failed=$(systemctl list-units --state=failed --no-legend --plain 2>&1) || true
+    printf '%s\\n' "$failed"
+    [ -n "$failed" ] && bad=1
+    echo
+    echo "=== greenboot"
+    # Not waited on — this runs on a clock, so \`activating\` here is the
+    # signal, and it is the one an ordering dependency would have cost.
+    systemctl status greenboot-healthcheck.service --no-pager -n 20 2>&1 || true
+    echo
+    echo "=== selftest"
+    if /usr/lib/keel/selftest; then :; else bad=1; fi
+    echo
+    echo "=== selftest, advisory"
+    if /usr/lib/keel/selftest --advisory; then :; else bad=1; fi
+    echo
+    echo "=== journal, this boot, warnings and above"
+    journalctl -b -p warning --no-pager 2>&1 || true
+} > "$esp/keel-boot.log" 2>&1
+
+# The full journal is the expensive write this file exists to avoid on a
+# boot that has nothing wrong with it. It only earns its place once
+# something above already said the boot was bad.
+if [ "$bad" = 1 ]; then
+    {
+        echo
+        echo "=== journal, this boot, everything"
+        journalctl -b --no-pager 2>&1 || true
+    } >> "$esp/keel-boot.log" 2>&1
+fi
+
+# FAT has no ownership to fix, but the card may be pulled without a clean
+# shutdown, and an unflushed log is an empty one. close_esp syncs too, on
+# the way back to read-only.
+sync
+"
+`;
+
+exports[`/usr/lib/bootc/kargs.d/50-keel.toml > renders the same bytes 1`] = `
+"mode 644
+# quiet: the kernel and the initrd otherwise narrate the whole boot down the
+# serial console at 115200 baud, which on a Pi 4 is most of a minute before
+# userspace starts. Warnings still reach the console, everything still
+# reaches dmesg and the journal, which is where the flight recorder reads.
+kargs = ["rootflags=noatime", "quiet"]
+"
+`;
+
+exports[`/usr/lib/greenboot/check/required.d/50-keel-selftest.sh > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+exec /usr/lib/keel/selftest
+"
+`;
+
+exports[`/usr/lib/greenboot/check/wanted.d/50-keel-advisory.sh > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+exec /usr/lib/keel/selftest --advisory
+"
+`;
+
+exports[`/usr/lib/keel/alert > renders the same bytes 1`] = `
+"mode 755
+#!/usr/bin/env python3
+"""Post failed and crash-looping units to the alert sink, once each, and
+their recovery once more.
+
+The sink is NTFY_URL in /etc/keel/alert.conf; with none configured this
+prints what it would have said and exits 0. State lives in
+$STATE_DIRECTORY (systemd's), so a unit that is still failing at the next
+tick is not reported twice, and one that fails on every boot is reported
+once. Always exits 0: the poller is never the failure it reports.
+"""
+
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import urllib.request
+
+CONFIG = "/etc/keel/alert.conf"
+STATE = os.path.join(os.environ.get("STATE_DIRECTORY", "/var/lib/keel"), "alert-state.json")
+JOURNAL_LINES = 12
+# podman runs each health check as a transient unit named after the
+# container id; one that fails is a check that failed, which the service's
+# own state already reflects.
+TRANSIENT = re.compile(r"^[0-9a-f]{64}-[0-9a-f]+\\.service$")
+
+
+def sink():
+    try:
+        with open(CONFIG) as handle:
+            for line in handle:
+                key, _, value = line.strip().partition("=")
+                if key == "NTFY_URL" and value:
+                    return value
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def failing():
+    """unit -> reason, for every unit systemd reports as failed or as
+    stuck in auto-restart — the state a crash-looping container lives in
+    without ever reaching 'failed'."""
+    out = subprocess.run(
+        ["systemctl", "list-units", "--all", "--plain", "--no-legend", "--output=json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    found = {}
+    for unit in json.loads(out or "[]"):
+        name = unit.get("unit", "")
+        if TRANSIENT.match(name):
+            continue
+        if unit.get("active") == "failed":
+            found[name] = "failed"
+        elif unit.get("sub") == "auto-restart":
+            found[name] = "crash-looping"
+    return found
+
+
+def journal(unit):
+    return subprocess.run(
+        ["journalctl", "-u", unit, "-n", str(JOURNAL_LINES), "--no-pager", "-o", "cat"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def post(url, title, body, priority, tags):
+    request = urllib.request.Request(
+        url,
+        data=body.encode(),
+        headers={"Title": title, "Priority": priority, "Tags": tags},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10):
+            return True
+    except OSError as error:
+        print("keel-alert: could not post to the sink: " + str(error), file=sys.stderr)
+        return False
+
+
+def load_state():
+    try:
+        with open(STATE) as handle:
+            return json.load(handle)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_state(state):
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as handle:
+        json.dump(state, handle, sort_keys=True)
+    os.replace(tmp, STATE)
+
+
+def main():
+    host = socket.gethostname()
+    url = sink()
+    reported = load_state()
+    current = failing()
+
+    for unit, reason in sorted(current.items()):
+        if reported.get(unit) == reason:
+            continue
+        title = host + ": " + unit + " " + reason
+        body = journal(unit) or "(no journal lines)"
+        print("keel-alert: " + title)
+        if url is None or post(url, title, body, "high", "warning"):
+            reported[unit] = reason
+
+    for unit in sorted(set(reported) - set(current)):
+        title = host + ": " + unit + " recovered"
+        print("keel-alert: " + title)
+        if url is None or post(url, title, "active again", "default", "white_check_mark"):
+            del reported[unit]
+
+    save_state(reported)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"
+`;
+
+exports[`/usr/lib/keel/converge-selinux > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+set -eu
+
+port=5335
+
+# Every write below commits the whole policy, which is half a minute of
+# CPU on a Pi 4 — and unbound, and so the LAN's resolver, waits on this
+# unit. So each fact is asked for before it is written, and a boot that
+# changes nothing costs a few reads.
+
+# 53 is labelled out of the box, so there is nothing to do and semanage
+# would refuse anyway.
+if [ "$port" != "53" ]; then
+    for proto in udp tcp; do
+        # The store's own record of local port labels, read directly:
+        # asking semanage to list them loads the whole policy into
+        # python first, eight seconds per question on a Pi 4. A store
+        # without the file has no local labels yet, and falls through.
+        grep -qsE "^portcon $proto $port " /etc/selinux/targeted/active/ports.local && continue
+        # Convergence in two verbs, because semanage has no single
+        # idempotent one: -a is an error on a port already in local
+        # policy, -m an error on a port that is not there yet. The add's
+        # complaint is the expected case and is swallowed; the modify's is
+        # not, so a policy store that genuinely cannot be written fails
+        # the unit where it can be seen.
+        semanage port -a -t dns_port_t -p "$proto" "$port" 2>/dev/null ||
+            semanage port -m -t dns_port_t -p "$proto" "$port"
+    done
+fi
+
+[ "$(getsebool virt_use_samba)" = "virt_use_samba --> on" ] ||
+    setsebool -P virt_use_samba on
+"
+`;
+
+exports[`/usr/lib/keel/decrypt-secrets > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+set -eu
+
+key=/etc/keel/age.key
+
+for blob in /etc/secrets/*.age; do
+    [ -e "$blob" ] || continue
+    out="\${blob%.age}"
+    # Decrypt to a temporary file and rename, so a reader never sees a
+    # half-written env file and a failed decrypt leaves the old one intact.
+    tmp="$out.new"
+    age --decrypt --identity "$key" --output "$tmp" "$blob"
+    chmod 600 "$tmp"
+    mv "$tmp" "$out"
+done
+"
+`;
+
+exports[`/usr/lib/keel/nftables/keel.nft > renders the same bytes 1`] = `
+"mode 644
+table inet keel {
+    set lan4 { type ipv4_addr; flags interval; }
+    set mesh4 { type ipv4_addr; flags interval; }
+    set mesh6 { type ipv6_addr; flags interval; }
+
+    set lan_tcp { type inet_service; }
+    set lan_udp { type inet_service; }
+    set mesh_tcp { type inet_service; }
+    set mesh_udp { type inet_service; }
+    set world_tcp { type inet_service; }
+    set world_udp { type inet_service; }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif lo accept
+        ct state established,related accept
+        ct state invalid drop
+
+        icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } accept
+        icmpv6 type { echo-request, destination-unreachable, time-exceeded, parameter-problem, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, mld-listener-query } accept
+
+        # DHCP, which conntrack cannot cover: the request leaves from 0.0.0.0
+        # for the broadcast address before an address exists, and the reply is
+        # broadcast too, so there is nothing for \`established,related\` to
+        # match. Without it the box comes up with a link and no network.
+        udp sport 67 udp dport 68 accept
+        # \`meta nfproto ipv6\`, not \`ip6\`: in an inet table \`ip6\` must be
+        # followed by a header field, and the syntax error takes the whole
+        # ruleset down with it.
+        meta nfproto ipv6 udp sport 547 udp dport 546 accept
+        # NetBIOS name answers, for the same reason: keel-hosts asks by
+        # broadcast and the node answers from its own address, so conntrack
+        # pairs nothing and the reply would die here. LAN only, and only from
+        # the name service's port.
+        ip saddr @lan4 udp sport 137 accept
+
+        # The one port the image itself opens. A board that answers nothing
+        # else is still a board someone can get into and fix.
+        ip saddr @lan4 tcp dport 22 accept
+        ip saddr @mesh4 tcp dport 22 accept
+        ip6 saddr @mesh6 tcp dport 22 accept
+
+        ip saddr @lan4 tcp dport @lan_tcp accept
+        ip saddr @lan4 udp dport @lan_udp accept
+        ip saddr @mesh4 tcp dport @mesh_tcp accept
+        ip saddr @mesh4 udp dport @mesh_udp accept
+        ip6 saddr @mesh6 tcp dport @mesh_tcp accept
+        ip6 saddr @mesh6 udp dport @mesh_udp accept
+
+        tcp dport @world_tcp accept
+        udp dport @world_udp accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+
+        ct state established,related accept
+
+        # This chain is where a container earns internet access, which is
+        # why the podman networks are not marked Internal (netavark's
+        # internal severs the host too, killing loopback-published ports).
+        # Only the open bridge may originate outbound traffic; netavark's
+        # own table handles the masquerade. keel-internal's bridge matches
+        # nothing here and falls to the drop policy.
+        iifname "keel-open0" accept
+    }
+}
+"
+`;
+
+exports[`/usr/lib/keel/profiles/1g/units/keel-apps.slice.conf > renders the same bytes 1`] = `
+"mode 644
+[Slice]
+# What the board has left once the core tier and the reserve are
+# accounted for. The apps' own caps may total more than this on
+# purpose: they are idle Go and Rust binaries and are never all hot at
+# once, and throttling here is how that is resolved.
+MemoryHigh=240M
+"
+`;
+
+exports[`/usr/lib/keel/profiles/1g/units/keel-core.slice.conf > renders the same bytes 1`] = `
+"mode 644
+[Slice]
+# The tier's hard-cap total, so the guarantee holds however hard the
+# apps push.
+MemoryLow=464M
+"
+`;
+
+exports[`/usr/lib/keel/profiles/4g/units/keel-apps.slice.conf > renders the same bytes 1`] = `
+"mode 644
+[Slice]
+# What the board has left once the core tier and the reserve are
+# accounted for. The apps' own caps may total more than this on
+# purpose: they are idle Go and Rust binaries and are never all hot at
+# once, and throttling here is how that is resolved.
+MemoryHigh=3120M
+"
+`;
+
+exports[`/usr/lib/keel/profiles/4g/units/keel-core.slice.conf > renders the same bytes 1`] = `
+"mode 644
+[Slice]
+# The tier's hard-cap total, so the guarantee holds however hard the
+# apps push.
+MemoryLow=464M
+"
+`;
+
+exports[`/usr/lib/keel/profiles/8g/units/keel-apps.slice.conf > renders the same bytes 1`] = `
+"mode 644
+[Slice]
+# What the board has left once the core tier and the reserve are
+# accounted for. The apps' own caps may total more than this on
+# purpose: they are idle Go and Rust binaries and are never all hot at
+# once, and throttling here is how that is resolved.
+MemoryHigh=6960M
+"
+`;
+
+exports[`/usr/lib/keel/profiles/8g/units/keel-core.slice.conf > renders the same bytes 1`] = `
+"mode 644
+[Slice]
+# The tier's hard-cap total, so the guarantee holds however hard the
+# apps push.
+MemoryLow=464M
+"
+`;
+
+exports[`/usr/lib/keel/profiles/index > renders the same bytes 1`] = `
+"mode 644
+1g 0
+4g 2048
+8g 6144
+"
+`;
+
+exports[`/usr/lib/keel/resolve-netbios > renders the same bytes 1`] = `
+"mode 755
+#!/usr/bin/env python3
+"""Resolve the NetBIOS names a share or the backup target were given.
+
+Reads every /etc/keel/hosts.d/*.conf for one NetBIOS name per line and
+answers each with a broadcast NBNS NAME QUERY REQUEST — the one thing
+that resolves a node on this network when the router's own DNS has never
+heard of it and the node advertises no mDNS, a router handing its own USB
+share a new address being the case this exists for. mount.cifs and
+getaddrinfo both resolve a name through /etc/hosts before anything else,
+and this is what keeps an answer there. A name that does not answer is
+logged and left out of the block that follows: the mount or the backup
+that needed it then fails on its own, with the address missing, which is
+the true reason. This always exits 0, so a NAS that is briefly
+unreachable is never what a failed unit reports.
+"""
+
+import glob
+import os
+import random
+import re
+import socket
+import struct
+import sys
+import time
+
+HOSTS_D = "/etc/keel/hosts.d"
+HOSTS_FILE = "/etc/hosts"
+BEGIN = "# keel-hosts begin"
+END = "# keel-hosts end"
+
+NBNS_PORT = 137
+ATTEMPTS = 3
+TIMEOUT = 2.0
+
+
+def read_names(directory):
+    """Every name across every *.conf in directory, deduplicated and in
+    the order first seen. A missing directory or no files is nothing to
+    resolve."""
+    names = []
+    seen = set()
+    for path in sorted(glob.glob(os.path.join(directory, "*.conf"))):
+        with open(path) as handle:
+            for line in handle:
+                name = line.strip()
+                if not name or name.startswith("#"):
+                    continue
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+    return names
+
+
+def encode_name(name):
+    """RFC 1002's first-level encoding: 16 raw bytes — 15 padded with
+    spaces and a suffix byte for the workstation service — become 32
+    ASCII characters, four bits at a time, wrapped as the single label
+    an NBNS question carries."""
+    raw = name.upper().encode("ascii", "replace")[:15].ljust(15, b" ") + bytes([0x20])
+    encoded = bytearray()
+    for byte in raw:
+        encoded.append((byte >> 4) + ord("A"))
+        encoded.append((byte & 0x0F) + ord("A"))
+    return bytes([len(encoded)]) + bytes(encoded) + b"\\x00"
+
+
+def build_query(name, transaction_id):
+    header = struct.pack(">HHHHHH", transaction_id, 0x0110, 1, 0, 0, 0)
+    question = encode_name(name) + struct.pack(">HH", 0x0020, 0x0001)
+    return header + question
+
+
+def parse_response(data, transaction_id):
+    """The first IPv4 out of a NAME QUERY RESPONSE that answers this
+    query, or None. Header, the 34-byte answer name echoed back,
+    TYPE/CLASS/TTL/RDLENGTH, then RDATA as 6-byte NB_FLAGS+address
+    entries — the first one is enough to mount with."""
+    if len(data) < 12:
+        return None
+    resp_id, flags = struct.unpack(">HH", data[:4])
+    if resp_id != transaction_id or not (flags & 0x8000) or (flags & 0x000F) != 0:
+        return None
+    offset = 12 + 34
+    if len(data) < offset + 10:
+        return None
+    _type, _cls, _ttl, rdlength = struct.unpack(">HHIH", data[offset : offset + 10])
+    offset += 10
+    if rdlength < 6 or len(data) < offset + 6:
+        return None
+    return socket.inet_ntoa(data[offset + 2 : offset + 6])
+
+
+def resolve(name):
+    """Broadcast up to ATTEMPTS times, TIMEOUT seconds each, and return
+    the first address a matching response carries — or None."""
+    transaction_id = random.randint(0, 0xFFFF)
+    query = build_query(name, transaction_id)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    try:
+        for _ in range(ATTEMPTS):
+            try:
+                sock.sendto(query, ("255.255.255.255", NBNS_PORT))
+            except OSError as error:
+                print("keel-hosts: could not query " + name + ": " + str(error), file=sys.stderr)
+                continue
+            deadline = time.monotonic() + TIMEOUT
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                sock.settimeout(remaining)
+                try:
+                    data, _ = sock.recvfrom(576)
+                except (socket.timeout, OSError):
+                    break
+                address = parse_response(data, transaction_id)
+                if address is not None:
+                    return address
+    finally:
+        sock.close()
+    return None
+
+
+def render_block(resolved):
+    lines = [BEGIN]
+    for name in sorted(resolved):
+        lines.append(resolved[name] + " " + name)
+    lines.append(END)
+    return "\\n".join(lines) + "\\n"
+
+
+def write_hosts(block):
+    """Replace the managed block, or append one if /etc/hosts carries
+    none yet. Written only when the result differs, so a steady run
+    touches nothing."""
+    try:
+        with open(HOSTS_FILE) as handle:
+            current = handle.read()
+    except FileNotFoundError:
+        current = ""
+    pattern = re.compile(re.escape(BEGIN) + ".*?" + re.escape(END) + "\\n?", re.DOTALL)
+    if pattern.search(current):
+        updated = pattern.sub(lambda _match: block, current)
+    else:
+        updated = current + ("" if current == "" or current.endswith("\\n") else "\\n") + block
+    if updated == current:
+        return False
+    with open(HOSTS_FILE, "w") as handle:
+        handle.write(updated)
+    return True
+
+
+def main():
+    names = read_names(HOSTS_D)
+    if not names:
+        print("keel-hosts: no names in " + HOSTS_D)
+        return 0
+    resolved = {}
+    for name in names:
+        address = resolve(name)
+        if address is None:
+            print("keel-hosts: " + name + " did not answer an NBNS query", file=sys.stderr)
+            continue
+        resolved[name] = address
+        print("keel-hosts: " + name + " -> " + address)
+    if write_hosts(render_block(resolved)):
+        print("keel-hosts: updated " + HOSTS_FILE)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"
+`;
+
+exports[`/usr/lib/keel/selftest > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+set -u
+
+# required  — the contract. A failure is a failed boot and, after retries,
+#             a rollback. Keep it precise.
+# static    — the subset that needs no running system.
+# advisory  — observations worth logging that must never trigger a
+#             rollback on their own.
+mode=required
+case "\${1:-}" in
+    --static) mode=static ;;
+    --advisory) mode=advisory ;;
+esac
+
+rc=0
+fail() { printf 'FAIL %s\\n' "$1"; rc=1; }
+ok() { printf 'ok   %s\\n' "$1"; }
+
+if [ "$mode" = advisory ]; then
+    # zram needs a kernel device a container cannot be given, so the
+    # condition is containerisation itself rather than a flag — on real
+    # hardware a missing zram device is a genuine finding.
+    if systemd-detect-virt --container --quiet; then
+        ok "zram swap (skipped: container)"
+    elif swapon --show=NAME --noheadings 2>/dev/null | grep -q zram; then
+        ok "zram swap"
+    else
+        fail "zram swap absent"
+    fi
+
+    # A built disk image is a fixed size, so a card is only as large as
+    # keel-growfs made it on first boot. Advisory rather than required: a
+    # small root is a waste of a card, not a reason to refuse the image.
+    # Measured at /sysroot, not /. On a bootc system / is a composefs with
+    # no block device behind it, so asking about / reports the overlay and
+    # says nothing about the card.
+    if systemd-detect-virt --container --quiet; then
+        ok "root filesystem size (skipped: container)"
+    else
+        root_src=$(findmnt --noheadings --output SOURCE /sysroot)
+        part_bytes=$(lsblk --bytes --noheadings --output SIZE "$root_src" | head -1)
+        fs_bytes=$(df --block-size=1 --output=size /sysroot | tail -1)
+        if [ -n "$part_bytes" ] && [ "$fs_bytes" -ge "$(( part_bytes / 100 * 90 ))" ]; then
+            ok "root filesystem fills its partition"
+        else
+            fail "root filesystem is $fs_bytes of $part_bytes bytes — did keel-growfs run?"
+        fi
+    fi
+
+    # The identity from keel.conf on the ESP: a name, an account sshd will
+    # admit, and at least one address range the packet filter admits.
+    # Membership rather than mere existence, because the group is what
+    # sshd and sudo match on — an admin account outside it can no more log
+    # in than one that does not exist, and this advisory is what says so
+    # while the card that fixes it is still in reach.
+    # Advisory, because a card that was never given a keel.conf boots to
+    # exactly this state and it is an image nobody has configured yet, not
+    # an image to roll back. In a container there is no ESP and no loaded
+    # ruleset to ask.
+    if systemd-detect-virt --container --quiet; then
+        ok "keel.conf applied (skipped: container)"
+    else
+        applied=1
+        case "$(cat /etc/hostname 2>/dev/null)" in
+            ""|localhost|localhost.localdomain) applied=0 ;;
+        esac
+        id -nG keel 2>/dev/null | tr ' ' '\\n' | grep -qx wheel || applied=0
+        nft list set inet keel lan4 2>/dev/null | grep -q elements || applied=0
+        if [ "$applied" = 1 ]; then
+            ok "keel.conf applied"
+        else
+            fail "keel.conf not applied: no hostname, no keel in wheel, or an empty lan4 set"
+        fi
+    fi
+
+
+
+    # Advisory on purpose. A blanket "nothing failed" is too broad to be a
+    # rollback trigger: one flaky unit would un-deploy a working image.
+    failed=$(systemctl list-units --state=failed --no-legend --plain | awk '{ print $1 }')
+    if [ -z "$failed" ]; then
+        ok "no failed units"
+    else
+        fail "failed units: $(echo "$failed" | tr '\\n' ' ')"
+    fi
+
+    exit $rc
+fi
+
+# --- binaries the image must carry -------------------------------------
+for binary in age growpart nft podman semanage sshd; do
+    if command -v "$binary" >/dev/null 2>&1; then
+        ok "binary $binary"
+    else
+        fail "binary $binary missing"
+    fi
+done
+
+# --- configuration parses ----------------------------------------------
+# Host keys are generated at first boot, so an unbooted image has none and
+# sshd refuses to run at all. A throwaway key checks the config by itself.
+sshd_ok=1
+if [ -f /etc/ssh/ssh_host_ed25519_key ]; then
+    sshd -t -f /etc/ssh/sshd_config 2>/dev/null || sshd_ok=0
+else
+    tmpkey=$(mktemp -u)
+    ssh-keygen -q -t ed25519 -N '' -f "$tmpkey" 2>/dev/null || sshd_ok=0
+    sshd -t -f /etc/ssh/sshd_config -h "$tmpkey" 2>/dev/null || sshd_ok=0
+    rm -f "$tmpkey" "$tmpkey.pub"
+fi
+if [ "$sshd_ok" = 1 ]; then
+    ok "sshd config"
+else
+    fail "sshd config rejected by sshd -t"
+fi
+
+# A malformed drop-in makes sudo refuse *everything*, which on this host
+# means every device resource stops working and the way in to fix it is the
+# same sudo that just broke.
+if visudo -cf /etc/sudoers.d/keel-admin >/dev/null 2>&1; then
+    ok "sudoers drop-in"
+else
+    fail "sudoers drop-in rejected by visudo -c"
+fi
+
+if nft --check --file /usr/lib/keel/nftables/keel.nft >/dev/null 2>&1; then
+    ok "nftables ruleset parses"
+else
+    fail "nftables ruleset rejected by nft --check"
+fi
+
+if mkdir -p /run/unbound && unbound-checkconf >/dev/null 2>&1; then
+    ok "unbound config"
+else
+    fail "unbound config rejected by: mkdir -p /run/unbound && unbound-checkconf"
+fi
+
+if [ "$mode" = static ]; then
+    exit $rc
+fi
+
+# --- runtime ------------------------------------------------------------
+# greenboot orders itself before boot-complete.target but not after these
+# units, so on a cold boot it can run while they are still starting. An
+# instantaneous check would fail a healthy image, three times, and roll it
+# back. One shared deadline, not one per unit: a genuinely broken service
+# should not multiply the wait by however many are listed.
+deadline=$(( $(date +%s) + 60 ))
+for unit in sshd.service nftables.service unbound.service; do
+    while ! systemctl is-active --quiet "$unit"; do
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            break
+        fi
+        sleep 1
+    done
+done
+
+for unit in sshd.service nftables.service unbound.service; do
+    # A quadlet-backed unit is materialised by a generator into
+    # /run/systemd/generator, and podman cannot run one inside a container.
+    # Detected by where the unit came from rather than by name, so the same
+    # check stays strict on hardware and honest in the container tier.
+    if systemd-detect-virt --container --quiet; then
+        fragment=$(systemctl show --property=FragmentPath --value "$unit" 2>/dev/null)
+        case "$fragment" in
+            /run/systemd/generator/*)
+                ok "unit $unit (skipped: quadlet in a container)"
+                continue
+                ;;
+        esac
+    fi
+    if systemctl is-active --quiet "$unit"; then
+        ok "unit $unit"
+    else
+        fail "unit $unit is $(systemctl is-active "$unit" 2>&1)"
+    fi
+done
+
+# Parsing the ruleset is not the same claim as the ruleset being loaded.
+if nft list table inet keel >/dev/null 2>&1; then
+    ok "nftables table loaded"
+else
+    fail "nftables table inet keel not loaded"
+fi
+
+# Secrets are the silent failure mode: a service whose environment is empty
+# starts anyway and then misbehaves, so an undecrypted blob is a failed boot.
+# A blob present with no identity to open it is the same failure, one step
+# earlier, and worth naming separately.
+if ls /etc/secrets/*.age >/dev/null 2>&1 && [ ! -s /etc/keel/age.key ]; then
+    fail "secret blobs present but /etc/keel/age.key is missing"
+fi
+for blob in /etc/secrets/*.age; do
+    if [ ! -e "$blob" ]; then
+        continue
+    fi
+    plain="\${blob%.age}"
+    if [ -s "$plain" ]; then
+        ok "secret $(basename "$plain")"
+    else
+        fail "secret $(basename "$plain") not decrypted"
+    fi
+done
+
+exit $rc
+"
+`;
+
+exports[`/usr/lib/modprobe.d/keel-deny.conf > renders the same bytes 1`] = `
+"mode 644
+blacklist algif_aead
+install algif_aead /bin/false
+blacklist algif_skcipher
+install algif_skcipher /bin/false
+"
+`;
+
+exports[`/usr/lib/systemd/journald.conf.d/99-keel.conf > renders the same bytes 1`] = `
+"mode 644
+[Journal]
+Storage=volatile
+RuntimeMaxUse=64M
+"
+`;
+
+exports[`/usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/50-keel.conf > renders the same bytes 1`] = `
+"mode 644
+[Service]
+ExecCondition=/bin/sh -c "! bootc status --format=yaml | grep -q 'image: localhost/'"
+"
+`;
+
+exports[`/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/50-keel.conf > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+# Persistent, so it waits for a synchronised clock like every persistent
+# timer here: a board with no RTC would otherwise treat NTP's first step
+# as weeks of missed windows and fetch an update on every boot.
+After=time-sync.target
+
+[Timer]
+OnBootSec=
+OnUnitInactiveSec=
+OnCalendar=Sat *-*-* 05:00
+RandomizedDelaySec=4h
+FixedRandomDelay=true
+Persistent=true
+"
+`;
+
+exports[`/usr/lib/systemd/system/greenboot-healthcheck.service.d/50-keel-after.conf > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+After=sshd.service nftables.service unbound.service
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-alert.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Post failed units to the alert sink
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/keel/alert
+StateDirectory=keel
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-alert.timer > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Poll for failed units every five minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-apps.slice > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=keel application services
+Before=slices.target
+
+[Slice]
+# systemd-oomd resolves memory pressure here and only here: an app dies
+# before the LAN loses its resolver.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=60%
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-core.slice > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=keel core services (resolver, proxy, identity)
+Before=slices.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-firstboot.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Apply the identity from keel.conf on the ESP
+After=local-fs.target
+Wants=network-pre.target
+Before=network-pre.target nftables.service sshd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+SELinuxContext=system_u:system_r:unconfined_t:s0
+ExecStart=/usr/bin/keel-firstboot
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-flightrecorder.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Write this boot's journal to the ESP for offline debugging
+# The ESP is all this needs, and /boot/efi is mounted before
+# local-fs.target. Ordering it after anything later would tie the record
+# of a bad boot to that boot going well.
+After=local-fs.target
+# Nothing gates this unit on a path under /boot/efi. A unit condition is
+# evaluated by PID 1 in init_t, and init_t holds getattr on the ESP's
+# dosfs_t but neither read nor write — so it would answer for a
+# filesystem it cannot open, and the answer would be yes. The script
+# asks instead, from the domain below.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# That domain. A context= mount option cannot be set on a remount or a
+# bind, so relabelling the ESP is not available and the process moves
+# instead. Entering unconfined_t needs an entrypoint label, hence
+# /usr/bin (bin_t) rather than /usr/lib/keel (lib_t).
+SELinuxContext=system_u:system_r:unconfined_t:s0
+ExecStart=/usr/bin/keel-flightrecorder
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-flightrecorder.timer > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Record this boot to the ESP once the boot has had time to settle
+
+[Timer]
+OnBootSec=2min
+# One shot per boot, so there is no wakeup budget to save by batching it
+# with other timers — and a log whose timestamp is where it was promised
+# is worth more here than a coalesced wakeup.
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-growfs.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Grow the root filesystem to fill its disk (bare metal included)
+# Upstream ships both the implementation and the right conditions for a VM,
+# but its unit carries ConditionVirtualization=vm and says so in a comment:
+# "For now we skip bare metal cases". Bare metal is the only target this
+# fleet has, so the policy of when to run needs replacing while the logic
+# does not — that logic already handles the part which is easy to get wrong,
+# where the real filesystem is /sysroot rather than the composefs mounted at
+# /, and has to be remounted writable before it can be resized.
+ConditionVirtualization=!container
+ConditionPathIsMountPoint=/sysroot
+ConditionPathExists=/usr/libexec/bootc-generic-growpart
+# Ahead of anything that pulls a container image onto the disk we are about
+# to enlarge.
+DefaultDependencies=no
+Requires=sysinit.target
+After=sysinit.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/bootc-generic-growpart
+# So the temporary writable remount of /sysroot does not leak out.
+MountFlags=slave
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-hosts.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Resolve NetBIOS names of the shares into /etc/hosts
+After=network-online.target
+Wants=network-online.target
+Before=remote-fs-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/keel/resolve-netbios
+ExecReload=/usr/lib/keel/resolve-netbios
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-hosts.timer > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Re-resolve NetBIOS names as a router's node moves address
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-podman-prune.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Reclaim dangling container layers
+ConditionPathExists=/usr/bin/podman
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman image prune --force
+Nice=10
+IOSchedulingClass=idle
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-podman-prune.timer > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Reclaim dangling container layers weekly
+# Persistent, so it has to wait for the clock: a board with no RTC boots
+# at the image's build date, and a persistent timer that loads before
+# NTP steps the clock forward fires as if it had missed every window in
+# the jump. chrony-wait holds time-sync.target until synchronised.
+After=time-sync.target
+
+[Timer]
+OnCalendar=Sun 04:00
+# Boards are off often enough that a missed window would otherwise mean
+# the prune simply never runs.
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-secrets.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Decrypt keel secret blobs
+After=local-fs.target
+Before=multi-user.target
+ConditionPathExists=/etc/keel/age.key
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/keel/decrypt-secrets
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-selinux.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Converge the SELinux port label and boolean the image's services need
+Before=unbound.service
+ConditionSecurity=selinux
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/keel/converge-selinux
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/nftables.service.d/50-keel.conf > renders the same bytes 1`] = `
+"mode 644
+[Service]
+ExecReload=
+ExecReload=/sbin/nft -f /etc/sysconfig/nftables.conf
+"
+`;
+
+exports[`/usr/lib/systemd/system/unbound.service.d/50-keel-memory.conf > renders the same bytes 1`] = `
+"mode 644
+[Service]
+Slice=keel-core.slice
+MemoryHigh=48M
+MemoryMax=64M
+"
+`;
+
+exports[`/usr/lib/systemd/system-generators/keel-memory-generator > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+set -eu
+
+normal_dir="\${1:-}"
+[ -n "$normal_dir" ] || exit 0
+
+root=/usr/lib/keel/profiles
+[ -f "$root/index" ] || exit 0
+
+# An explicit kernel argument wins, which is also how the image tests
+# exercise a profile the build host does not have the RAM for.
+profile=$(sed -n 's/.*keel\\.mem_profile=\\([A-Za-z0-9_]*\\).*/\\1/p' /proc/cmdline)
+
+if [ -z "$profile" ]; then
+    ram=$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo)
+    profile=$(awk -v ram="$ram" '$2 <= ram { name = $1 } END { print name }' "$root/index")
+fi
+
+src="$root/$profile/units"
+[ -d "$src" ] || exit 0
+
+for conf in "$src"/*.conf; do
+    [ -e "$conf" ] || continue
+    unit=$(basename "$conf" .conf)
+    mkdir -p "$normal_dir/$unit.d"
+    ln -sf "$conf" "$normal_dir/$unit.d/50-keel-memory.conf"
+done
+"
+`;
+
+exports[`/usr/lib/systemd/system-preset/50-keel.preset > renders the same bytes 1`] = `
+"mode 644
+enable sshd.service
+enable nftables.service
+enable systemd-oomd.service
+enable keel-secrets.service
+enable keel-growfs.service
+enable keel-firstboot.service
+enable chrony-wait.service
+enable unbound.service
+enable keel-selinux.service
+enable keel-hosts.service
+enable keel-hosts.timer
+enable keel-alert.timer
+enable keel-podman-prune.timer
+enable greenboot-healthcheck.service
+enable bootc-fetch-apply-updates.timer
+enable keel-flightrecorder.timer
+"
+`;
+
+exports[`/usr/lib/systemd/zram-generator.conf > renders the same bytes 1`] = `
+"mode 644
+[zram0]
+zram-size = ram / 2
+compression-algorithm = lz4
+"
+`;
+
+exports[`/usr/lib/tmpfiles.d/keel.conf > renders the same bytes 1`] = `
+"mode 644
+d /etc/secrets 0700 root root - -
+d /var/lib/keel 0755 root root - -
+"
+`;
+
+exports[`/usr/lib/tmpfiles.d/keel-containers.conf > renders the same bytes 1`] = `
+"mode 644
+d /var/lib/containers 0700 root root - -
+"
+`;
+
+exports[`/usr/share/containers/systemd/keel-internal.network > renders the same bytes 1`] = `
+"mode 644
+[Network]
+NetworkName=keel-internal
+InterfaceName=keel-int0
+Subnet=10.89.0.0/24
+Gateway=10.89.0.1
+DisableDNS=true
+"
+`;
+
+exports[`/usr/share/containers/systemd/keel-open.network > renders the same bytes 1`] = `
+"mode 644
+[Network]
+NetworkName=keel-open
+InterfaceName=keel-open0
+Subnet=10.89.1.0/24
+Gateway=10.89.1.1
+DisableDNS=true
+"
+`;
