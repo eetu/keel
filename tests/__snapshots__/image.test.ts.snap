@@ -803,6 +803,31 @@ exports[`/usr/lib/keel/profiles/index > renders the same bytes 1`] = `
 "
 `;
 
+exports[`/usr/lib/keel/remount > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+# Retry every failed network mount, then start what requires each one
+# that came up. Exits 0 always: a share that is still down is the mount
+# unit's own failed state, already reported, and not this unit's.
+set -u
+
+systemctl list-units --type=mount --state=failed --plain --no-legend |
+  while read -r unit _; do
+    case "$(systemctl show -p What --value "$unit")" in
+      //*) ;;
+      *) continue ;;
+    esac
+    if systemctl start "$unit"; then
+      echo "keel-remount: $unit mounted"
+      for dependent in $(systemctl show -p RequiredBy --value "$unit"); do
+        systemctl start "$dependent" && echo "keel-remount: $dependent started"
+      done
+    fi
+  done
+exit 0
+"
+`;
+
 exports[`/usr/lib/keel/resolve-netbios > renders the same bytes 1`] = `
 "mode 755
 #!/usr/bin/env python3
@@ -1455,6 +1480,33 @@ WantedBy=timers.target
 "
 `;
 
+exports[`/usr/lib/systemd/system/keel-remount.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Retry failed network mounts and start what requires them
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/keel/remount
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-remount.timer > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Retry failed network mounts every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+"
+`;
+
 exports[`/usr/lib/systemd/system/keel-secrets.service > renders the same bytes 1`] = `
 "mode 644
 [Unit]
@@ -1553,6 +1605,7 @@ enable keel-selinux.service
 enable keel-hosts.service
 enable keel-hosts.timer
 enable keel-alert.timer
+enable keel-remount.timer
 enable keel-podman-prune.timer
 enable greenboot-healthcheck.service
 enable bootc-fetch-apply-updates.timer

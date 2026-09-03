@@ -10,6 +10,7 @@ import { renderMemory } from "./memory";
 import { renderNetwork } from "./network";
 import { renderNftables } from "./nftables";
 import { renderNetworks } from "./quadlet";
+import { KEEL_REMOUNT_TIMER, renderRemount } from "./remount";
 import { renderSecrets } from "./secrets";
 import { renderSelftest, type Validation } from "./selftest";
 import { renderSelinux, SELINUX_UNIT } from "./selinux";
@@ -50,6 +51,9 @@ const UNITS = [
   // Posts failed and crash-looping units to the alert sink, every five minutes.
   // The timer alone: the service it fires has no [Install] of its own.
   KEEL_ALERT_TIMER,
+  // Retries every failed network mount and starts what requires it, every five
+  // minutes — systemd's `Restart=` has no counterpart for a mount.
+  KEEL_REMOUNT_TIMER,
   "keel-podman-prune.timer",
   // Listed explicitly even though its own package presets it, so the
   // "every presetted unit is enabled" image check covers the thing that decides
@@ -103,6 +107,7 @@ export function renderAll(): RenderResult {
       renderDns(),
       renderHosts(),
       renderAlert(),
+      renderRemount(),
       renderSelinux(),
       renderNftables(),
       renderSelftest(REQUIRED_UNITS, VALIDATIONS),

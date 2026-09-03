@@ -576,6 +576,18 @@ backend`) unless it waits. No `Conflicts=` between the units — that would kill
   spellings and names the canonical one. That derived line is also the whole of
   a service's ordering against its share — `Requires=` plus `After=` on the mount
   unit — so an entry states the `mounts` line and never the unit's name.
+- **A mount has no `Restart=`, and an automount is not one.** A share whose
+  server is off at boot fails once and stays failed, and every quadlet that
+  binds a path under it ends its start job with "Dependency failed" — which
+  `Restart=always` never sees, since the service did not run. An `.automount`
+  does not change that: `RequiresMountsFor=` resolves to the `.mount` unit and
+  never to the automount (`unit_add_mount_dependencies` in systemd's
+  `src/core/unit.c`), so the service's start still pulls the mount job and still
+  fails on it; the trigger would serve a shell, not a container. What retries is
+  `keel-remount.timer` (`src/render/remount.ts`): every five minutes it starts
+  each failed mount whose source is a network path, and for each that comes up
+  starts the units in its `RequiredBy=`. A start on an active unit is a no-op,
+  so a quiet tick touches nothing.
 - **A missing `mount.cifs` does not reject `credentials=`, it ignores it.** The
   option is the helper's, not the kernel's, and the helper is image content — so
   on a board whose booted image predates `cifs-utils`, util-linux mounts through
