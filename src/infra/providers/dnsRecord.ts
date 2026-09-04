@@ -26,7 +26,11 @@ import { type Args } from "./inputs";
 
 /** The item and field the token lives at — a committed convention, not a house fact. */
 export const CLOUDFLARE_VAULT_ITEM = "cloudflare";
-export const CLOUDFLARE_TOKEN_FIELD = "token";
+/**
+ * The `cloudflare` item is a login whose password is the API token — the same
+ * field the proxy's DNS-01 challenge reads, so one item serves both.
+ */
+export const CLOUDFLARE_TOKEN_FIELD = "password";
 
 /** Cloudflare's code for "no such DNS record" — a 404 wearing a 200. */
 const RECORD_GONE = 81044;
@@ -110,7 +114,9 @@ async function zoneId(bearer: string, domain: string): Promise<string> {
   const zones = await cf<CfZone[]>(bearer, `/zones?name=${encodeURIComponent(domain)}`);
   const zone = zones[0];
   if (zone === undefined) {
-    throw new Error(`no Cloudflare zone named ${domain} is readable with cloudflare/token`);
+    throw new Error(
+      `no Cloudflare zone named ${domain} is readable with the cloudflare item's token`,
+    );
   }
   return zone.id;
 }
