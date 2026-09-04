@@ -16,9 +16,9 @@ The division of labour is the whole design:
   the device — pihole, traefik, kanidm and oauth2-proxy included, alongside the
   app services — as quadlets it writes and manages, plus their Traefik routes,
   their memory caps, the ports the packet filter admits to them, their encrypted
-  secret blobs, and (as those providers land) Cloudflare DNS, NetBird account
+  secret blobs, and their public Cloudflare DNS records, with NetBird account
   state, Kanidm OAuth2 clients, Beszel users, the restic repository and each
-  host's booted image digest.
+  host's booted image digest still to come as those providers land.
 
 The line between them is change frequency. An app service changes weekly and
 `pulumi up` applies it in seconds; the machine changes rarely and costs a reboot.
@@ -49,9 +49,11 @@ built from them:
   `refresh`, never on a preview.
 
 `Service` (`src/infra/service.ts`) composes them: one `ServiceSpec` becomes a
-quadlet, a memory drop-in, a unit, a route file, and — as those providers land —
-a DNS record and an OIDC client. The ports it asks the packet filter for go into
-one file the program writes for the whole host; see the trap about the merge.
+quadlet, a memory drop-in, a unit, a route file, and — as that provider lands —
+an OIDC client. Its public DNS record is a resource of its own beside it, in
+`src/infra/index.ts` rather than inside `Service`, one per `publicDns: true`
+vhost — see below. The ports it asks the packet filter for go into one file the
+program writes for the whole host; see the trap about the merge.
 
 **Why quadlets and not `@pulumi/docker` against the podman socket.** The Docker
 API has no `EnvironmentFile`, so environment would have to be passed inline and
@@ -394,9 +396,25 @@ allowlist and the gate both.
 per deployed vhost, and dnsmasq's `hostsdir` picks the file up on its own — so
 adding a vhost is a hosts line and retiring one removes it, both in the same
 deploy that changed the catalog, and the resolver never restarts either way.
-Public records (`publicDns: true`) are not yet keel's: the old repository
-created the ones that exist, and a Cloudflare provider that adopts them is
-backlog.
+Public records (`publicDns: true`) are keel's too now — see the next paragraph.
+
+**A public name is a resource, and its token never leaves the call.**
+`DnsRecord` (`src/infra/providers/dnsRecord.ts`) writes one Cloudflare A record
+per `publicDns: true` vhost — service and remote alike, from
+`publicRecords(catalog)` in `src/config/spec.ts` — pointing at the same
+`lanAddress` the hosts file does. `read` re-asks Cloudflare on every refresh, so
+a record edited by hand in the dashboard surfaces as drift the same way a
+rotated secret does, and retiring the entry deletes the record in the same
+deploy. `create` adopts rather than assumes an empty zone: the old repository
+populated it by hand, so a record already answering that name and type is
+matched and taken over — patched first if its content or ttl disagree, left for
+a person to resolve if more than one exists. Not `@pulumi/cloudflare`: that
+provider configures itself at preview time, from a token that would have to sit
+in the process environment or in stack config either way — a plaintext file on
+disk, or a value in state. This is a dynamic provider instead, so the token is
+read from the vault inside `create`, `update`, `read` and `delete` alone, never
+captured and never printed — the same shape `SealedEnv` uses, and like every
+vault read it runs from a terminal `op` can prompt, never on a bare preview.
 
 **A route to another machine is an entry of its own shape.** A `RemoteSpec` is
 a vhost whose upstream is not on this board: it gets the route, the LAN record
@@ -782,10 +800,14 @@ or unreadable`. Where in the run it fails is deliberate: **a `SealedEnv`
 
 ## Migration status
 
-`../raspi` is authoritative for anything not listed here. LAN DNS is keel's own
-now, a hosts file Pi-hole's entry derives from the catalog; the public records a
-vhost also wants (`publicDns: true`) are still the old repository's, and stay
-that way until a Cloudflare provider lands here. Cloudflare is the only
-resource both repos could touch: when Pulumi takes it over, `cloudflare_dns` must
-be removed from the old repo's `DEPLOY` in the same change, because its orphan
-reaper deletes any LAN-pointing A record it does not know about.
+`../raspi` is authoritative for anything not listed here. LAN DNS is keel's own,
+a hosts file Pi-hole's entry derives from the catalog, and so is public DNS now
+— `DnsRecord` writes the A record for every `publicDns: true` vhost. Cloudflare
+was the only resource both repos could touch, and `cloudflare_dns` left the old
+repository's `DEPLOY` in this change, because its orphan reaper deleted any
+LAN-pointing A record it did not know about — left running, it would have
+reaped every record this repository now owns. Nothing here reaps in the other
+direction: records the old repository made for services that no longer exist
+are orphans nobody deletes. List them by hand once
+(`GET /zones/{zone}/dns_records?type=A&content=<lanAddress>`), compare with the
+catalog, and delete what the catalog no longer names.

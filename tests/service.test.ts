@@ -18,6 +18,7 @@ import { EXAMPLE_SERVICES, SERVICES } from "../src/config/services";
 import {
   catalogOf,
   type Ingress,
+  publicRecords,
   type RemoteSpec,
   runSetup,
   secretFields,
@@ -234,6 +235,54 @@ describe("the resolver's hosts file", () => {
     // Traefik itself: the one entry in the committed catalog with no vhost.
     const proxy = SERVICES.find((spec) => spec.subdomain === null)!;
     expect(lines.some((line) => line.endsWith(` ${proxy.name}.${NETWORK.domain}`))).toBe(false);
+  });
+});
+
+describe("public DNS records", () => {
+  // A remote can opt in the same way a service does, and one of these two does.
+  const publicRemote: RemoteSpec = {
+    name: "remote-public",
+    description: "fixture",
+    subdomain: "remote-public",
+    upstream: "http://198.51.100.9:9000",
+    auth: "open",
+    publicDns: true,
+  };
+  const privateRemote: RemoteSpec = {
+    name: "remote-private",
+    description: "fixture",
+    subdomain: "remote-private",
+    upstream: "http://198.51.100.10:9000",
+    auth: "open",
+  };
+  const catalog = catalogOf(EXAMPLE_SERVICES, [publicRemote, privateRemote]);
+  const records = publicRecords(catalog, NETWORK);
+
+  it("carries exactly the entries that opted in with publicDns: true, services and remotes alike", () => {
+    const expected = [
+      ...EXAMPLE_SERVICES.filter((spec) => spec.publicDns === true).map((spec) => spec.name),
+      publicRemote.name,
+    ].sort();
+    expect(records.map((record) => record.name).sort()).toEqual(expected);
+  });
+
+  it("points every record at the LAN address, under the deployment's own domain", () => {
+    for (const record of records) {
+      expect(record.content).toBe(NETWORK.lanAddress);
+      expect(record.fqdn.endsWith(`.${NETWORK.domain}`)).toBe(true);
+    }
+  });
+
+  it("never names a service with subdomain: null", () => {
+    const proxy = EXAMPLE_SERVICES.find((spec) => spec.subdomain === null)!;
+    expect(records.some((record) => record.name === proxy.name)).toBe(false);
+  });
+
+  it("leaves out an entry that never set publicDns: true", () => {
+    expect(records.some((record) => record.name === privateRemote.name)).toBe(false);
+    const vaultwarden = EXAMPLE_SERVICES.find((spec) => spec.name === "vaultwarden")!;
+    expect(vaultwarden.publicDns).not.toBe(true);
+    expect(records.some((record) => record.name === vaultwarden.name)).toBe(false);
   });
 });
 

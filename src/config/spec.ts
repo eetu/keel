@@ -15,7 +15,7 @@
  * match.
  */
 
-import { type Installation, type ServiceFile, type ServiceMemory } from "./types";
+import { type Installation, type Network, type ServiceFile, type ServiceMemory } from "./types";
 
 export type Egress =
   /** No route off the host. The default: a service earns internet access. */
@@ -480,6 +480,29 @@ export function vhosts(catalog: Catalog): readonly { name: string; subdomain: st
       .map((spec) => ({ name: spec.name, subdomain: subdomainOf(spec)! })),
     ...catalog.remotes.map((remote) => ({ name: remote.name, subdomain: remote.subdomain })),
   ].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Public DNS records: `vhosts()` filtered to the entries that opted in with
+ * `publicDns: true`, in the same order — a Cloudflare record and a Pi-hole line
+ * are the same subdomain, arrived at the same way, from two different readings
+ * of one list.
+ */
+export function publicRecords(
+  catalog: Catalog,
+  network: Network,
+): readonly { name: string; fqdn: string; content: string }[] {
+  const opted = new Set([
+    ...catalog.services.filter((spec) => spec.publicDns === true).map((spec) => spec.name),
+    ...catalog.remotes.filter((remote) => remote.publicDns === true).map((remote) => remote.name),
+  ]);
+  return vhosts(catalog)
+    .filter((vhost) => opted.has(vhost.name))
+    .map((vhost) => ({
+      name: vhost.name,
+      fqdn: `${vhost.subdomain}.${network.domain}`,
+      content: network.lanAddress,
+    }));
 }
 
 /**

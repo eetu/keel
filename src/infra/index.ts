@@ -28,6 +28,7 @@ import {
   dependencyNames,
   deploymentGaps,
   orderServices,
+  publicRecords,
   resolveSecretRefs,
   runSetup,
   secretFields,
@@ -43,6 +44,7 @@ import { NETWORK_NAMES, networkQuadlet } from "../render/quadlet";
 import CertSync from "./certSync";
 import KeelBackup from "./keelBackup";
 import CifsMount from "./mount";
+import { DnsRecord } from "./providers/dnsRecord";
 import { ImageDigest } from "./providers/imageDigest";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedEnv } from "./providers/sealedEnv";
@@ -433,6 +435,26 @@ for (const remote of catalog.remotes) {
       gate: catalog.gate,
     })!,
     mode: "644",
+  });
+}
+
+/**
+ * One Cloudflare A record per `publicDns: true` vhost — service or remote —
+ * pointing at the same address the LAN's own record does: the board the proxy
+ * runs on. Never proxied through Cloudflare: its HTTP proxy would front a LAN
+ * address Cloudflare cannot reach anyway, and TLS terminates on the board, not
+ * at Cloudflare's edge. ttl 120 so a moved address propagates in minutes.
+ *
+ * No `dependsOn`: a DNS record needs nothing running to be correct, the same
+ * as a route file.
+ */
+for (const record of publicRecords(catalog, INSTALLATION.network)) {
+  new DnsRecord(`${record.name}-dns`, {
+    vault: INSTALLATION.vault,
+    domain: INSTALLATION.network.domain,
+    name: record.fqdn,
+    content: record.content,
+    ttl: 120,
   });
 }
 
