@@ -14,21 +14,32 @@
  *
  * Uses the `op` CLI's desktop-app integration, so there is no session token to
  * manage: the first call prompts for Touch ID and is cached for a while after.
- * Fields are read one at a time and in order, so a cold keychain asks once and
- * the rest of the item follows — concurrent reads would race the same prompt.
+ * Pulumi runs resources concurrently, so several reads do race that first
+ * prompt — the losers hear "authorization prompt dismissed" and nothing else
+ * distinguishes them from a field that is missing. A read therefore retries a
+ * failure that does not name a missing item or field, with a pause that gives
+ * the prompt time to be answered; only a definite "isn't an item", "isn't a
+ * field" or "not found" is the empty string straight away. Two deploys in a
+ * row stopped at one such loser before this, each on a different field.
  */
+
+/** What `op` says when the reference itself is wrong; anything else is retried. */
+const DEFINITE = /isn't an item|isn't a field|could not find|not found|no such/i;
 
 /** A single field of an item. Returns "" when absent, so optional paths stay branch-free. */
 export async function readField(vault: string, item: string, field: string): Promise<string> {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const exec = promisify(execFile);
-
-  try {
-    const { stdout } = await exec("op", ["read", `op://${vault}/${item}/${field}`]);
-    return stdout.replace(/\n$/, "");
-  } catch {
-    return "";
+  for (let pauseMs = 2000; ; pauseMs *= 2) {
+    try {
+      const { stdout } = await exec("op", ["read", `op://${vault}/${item}/${field}`]);
+      return stdout.replace(/\n$/, "");
+    } catch (error) {
+      const said = String((error as { stderr?: string }).stderr ?? "");
+      if (DEFINITE.test(said) || pauseMs > 16000) return "";
+      await new Promise((wake) => setTimeout(wake, pauseMs));
+    }
   }
 }
 

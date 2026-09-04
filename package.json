@@ -21,8 +21,8 @@
     "card": "image/card.sh",
     "qemu-test": "image/qemu-test.sh",
     "pulumi": "dotenv -e .env -- pulumi",
-    "preview": "dotenv -e .env -- pulumi preview --refresh --parallel 4",
-    "deploy": "dotenv -e .env -- pulumi up --refresh --parallel 4"
+    "preview": "op vault list >/dev/null && dotenv -e .env -- pulumi preview --refresh --parallel 4",
+    "deploy": "op vault list >/dev/null && dotenv -e .env -- pulumi up --refresh --parallel 4"
   },
   "dependencies": {
     "@pulumi/pulumi": "^3.150.0"
