@@ -22,6 +22,14 @@
  * `Requires=` it. A start on an active unit is a no-op, so a tick with nothing
  * failed touches nothing, and a retired service is disabled by the deploy and
  * so never in a mount's `RequiredBy=`.
+ *
+ * The other way a share dies is quieter: its server moves address, the kernel's
+ * session is to the old one, and the mount stays *active* while every access
+ * answers "Host is down". `keel-hosts` learns the new address within minutes,
+ * but a mount only reads the name when it mounts. So the same tick also asks
+ * each active network mount to answer a `statfs` within ten seconds, and
+ * restarts the one that cannot — which remounts against the current address
+ * and, through `Requires=`, restarts the services that bind it.
  */
 
 import { dedent, file, merge, script, type Tree } from "./tree";
@@ -36,20 +44,31 @@ function remountScript(): Tree {
     dedent(`
       #!/bin/sh
       # Retry every failed network mount, then start what requires each one
-      # that came up. Exits 0 always: a share that is still down is the mount
-      # unit's own failed state, already reported, and not this unit's.
+      # that came up; restart every active network mount whose server no longer
+      # answers. Exits 0 always: a share that is still down is the mount unit's
+      # own failed state, already reported, and not this unit's. Every unit
+      # name follows a "--": the root mount is "-.mount", which systemctl
+      # would otherwise read as an option.
       set -u
 
-      systemctl list-units --type=mount --state=failed --plain --no-legend |
-        while read -r unit _; do
-          case "$(systemctl show -p What --value "$unit")" in
+      systemctl list-units --type=mount --state=failed,active --plain --no-legend |
+        while read -r unit _ active _; do
+          case "$(systemctl show -p What --value -- "$unit")" in
             //*) ;;
             *) continue ;;
           esac
-          if systemctl start "$unit"; then
+          if [ "$active" = active ]; then
+            where="$(systemctl show -p Where --value -- "$unit")"
+            if ! timeout 10 stat -f "$where" >/dev/null 2>&1; then
+              echo "keel-remount: $unit is stale, restarting"
+              systemctl restart -- "$unit" || true
+            fi
+            continue
+          fi
+          if systemctl start -- "$unit"; then
             echo "keel-remount: $unit mounted"
-            for dependent in $(systemctl show -p RequiredBy --value "$unit"); do
-              systemctl start "$dependent" && echo "keel-remount: $dependent started"
+            for dependent in $(systemctl show -p RequiredBy --value -- "$unit"); do
+              systemctl start -- "$dependent" && echo "keel-remount: $dependent started"
             done
           fi
         done

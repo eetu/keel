@@ -597,7 +597,10 @@ backend`) unless it waits. No `Conflicts=` between the units — that would kill
   `keel-remount.timer` (`src/render/remount.ts`): every five minutes it starts
   each failed mount whose source is a network path, and for each that comes up
   starts the units in its `RequiredBy=`. A start on an active unit is a no-op,
-  so a quiet tick touches nothing.
+  so a quiet tick touches nothing. The same tick restarts an _active_ mount
+  whose `statfs` does not answer within ten seconds: a server that moved keeps
+  the mount active and every access answering `Host is down`, and a mount
+  reads the name only when it mounts.
 - **A missing `mount.cifs` does not reject `credentials=`, it ignores it.** The
   option is the helper's, not the kernel's, and the helper is image content — so
   on a board whose booted image predates `cifs-utils`, util-linux mounts through
@@ -617,31 +620,36 @@ backend`) unless it waits. No `Conflicts=` between the units — that would kill
   whether the _host's current_ image does. So a host's first share is a new image
   digest and a reboot first, then `yarn deploy`.
 - **A router's share moves; name it and let the image find it.** A router that
-  hands out an address by DHCP reservation does not always keep the
-  reservation, and when it moves, its own DNS never hears about it and it
-  advertises no mDNS either — the one thing that still answers for it is a
-  NetBIOS NAME QUERY broadcast to UDP 137, what `smbutil lookup` and
-  `nmblookup` do by hand. The board runs no name service of its own, and the
-  kernel's CIFS driver resolves nothing — `mount.cifs` reads a name through
-  `getaddrinfo`, which reads `/etc/hosts` before it asks anything else. So
-  `keel-hosts.service` sends that broadcast for every name a share or the
-  backup target is given, at boot and every five minutes, and writes the
-  answer into `/etc/hosts`. The backup mounts by calling `mount(2)` directly,
-  which takes no name at all — its script resolves the host itself and passes
-  the address as the CIFS `ip=` option, the same file `mount.cifs` would have
-  read. The filter has to let the answer in: the query goes to the broadcast
-  address and the node answers from its own, so conntrack pairs nothing and
-  `established,related` does not match — `keel.nft` accepts UDP from source port
-  137 off the LAN set for exactly this, the same shape as its DHCP rule. Without
-  that line the query works from any laptop and never from the board. And the
-  deploy _reloads_ the unit rather than starting it: a oneshot with
-  `RemainAfterExit` that ran at boot is active, so `systemctl start` on it is a
-  no-op, and a name list written after boot would sit unresolved while the mount
-  units written beside it failed on it. `ExecReload=` is the resolver itself —
-  and a reload is a verb the _booted_ unit has to know: a deploy run against
-  an image whose copy has no `ExecReload=` fails at that resource, and Pulumi
-  stops the run there. When a commit changes both halves, the image lands
-  first and `yarn deploy` follows the reboot.
+  hands out an address by DHCP reservation does not always keep the reservation,
+  and when it moves, its own DNS never hears about it and it advertises no mDNS
+  either — the one thing that still answers for it is a NetBIOS NAME QUERY
+  broadcast to UDP 137, what `smbutil lookup` and `nmblookup` do by hand. The
+  board runs no name service of its own, and the kernel's CIFS driver resolves
+  nothing — `mount.cifs` reads a name through `getaddrinfo`, which reads
+  `/etc/hosts` before it asks anything else. So `keel-hosts.service` sends that
+  broadcast for every name a share or the backup target is given, at boot and
+  every five minutes, and writes the answer into `/etc/hosts`. The backup mounts
+  by calling `mount(2)` directly, which takes no name at all — its script
+  resolves the host itself and passes the address as the CIFS `ip=` option, the
+  same file `mount.cifs` would have read. The filter has to let the answer in:
+  the query goes to the broadcast address and the node answers from its own, so
+  conntrack pairs nothing and `established,related` does not match — `keel.nft`
+  accepts UDP from source port 137 off the LAN set for exactly this, the same
+  shape as its DHCP rule. Without that line the query works from any laptop and
+  never from the board. And the deploy _reloads_ the unit rather than starting
+  it: a oneshot with `RemainAfterExit` that ran at boot is active, so `systemctl
+start` on it is a no-op, and a name list written after boot would sit
+  unresolved while the mount units written beside it failed on it. `ExecReload=`
+  is the resolver itself. The five-minute timer fires a second unit,
+  `keel-hosts-refresh.service`, and not that one: a timer's start job on a unit
+  that is still active is the same no-op, and `OnUnitActiveSec=` counts from an
+  activation that never recurs — the first image's timer fired once at boot and
+  never again, and a server that moved back to its old address went unnoticed
+  until the status page's check on it went red. And a reload is a verb the
+  _booted_ unit has to know: a deploy run against an image whose copy has no
+  `ExecReload=` fails at that resource, and Pulumi stops the run there. When a
+  commit changes both halves, the image lands first and `yarn deploy` follows
+  the reboot.
 - **A SELinux policy commit costs about 38 seconds on a Pi 4, and unbound waits
   on it.** `semanage port -a`/`-m` and `setsebool -P` each rebuild and commit the
   whole policy store, and `keel-selinux.service` (rendered by

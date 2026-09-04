@@ -807,20 +807,31 @@ exports[`/usr/lib/keel/remount > renders the same bytes 1`] = `
 "mode 755
 #!/bin/sh
 # Retry every failed network mount, then start what requires each one
-# that came up. Exits 0 always: a share that is still down is the mount
-# unit's own failed state, already reported, and not this unit's.
+# that came up; restart every active network mount whose server no longer
+# answers. Exits 0 always: a share that is still down is the mount unit's
+# own failed state, already reported, and not this unit's. Every unit
+# name follows a "--": the root mount is "-.mount", which systemctl
+# would otherwise read as an option.
 set -u
 
-systemctl list-units --type=mount --state=failed --plain --no-legend |
-  while read -r unit _; do
-    case "$(systemctl show -p What --value "$unit")" in
+systemctl list-units --type=mount --state=failed,active --plain --no-legend |
+  while read -r unit _ active _; do
+    case "$(systemctl show -p What --value -- "$unit")" in
       //*) ;;
       *) continue ;;
     esac
-    if systemctl start "$unit"; then
+    if [ "$active" = active ]; then
+      where="$(systemctl show -p Where --value -- "$unit")"
+      if ! timeout 10 stat -f "$where" >/dev/null 2>&1; then
+        echo "keel-remount: $unit is stale, restarting"
+        systemctl restart -- "$unit" || true
+      fi
+      continue
+    fi
+    if systemctl start -- "$unit"; then
       echo "keel-remount: $unit mounted"
-      for dependent in $(systemctl show -p RequiredBy --value "$unit"); do
-        systemctl start "$dependent" && echo "keel-remount: $dependent started"
+      for dependent in $(systemctl show -p RequiredBy --value -- "$unit"); do
+        systemctl start -- "$dependent" && echo "keel-remount: $dependent started"
       done
     fi
   done
@@ -1438,9 +1449,22 @@ Description=Re-resolve NetBIOS names as a router's node moves address
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=5min
+Unit=keel-hosts-refresh.service
 
 [Install]
 WantedBy=timers.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-hosts-refresh.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Re-resolve NetBIOS names of the shares into /etc/hosts
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/keel/resolve-netbios
 "
 `;
 

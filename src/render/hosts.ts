@@ -46,6 +46,8 @@ export const HOSTS_CONFIG_PATH = `${HOSTS_D_DIR}/50-keel.conf`;
 export const RESOLVE_NETBIOS_PATH = "/usr/lib/keel/resolve-netbios";
 export const KEEL_HOSTS_SERVICE = "keel-hosts.service";
 export const KEEL_HOSTS_TIMER = "keel-hosts.timer";
+/** What the timer runs: the same script, in a unit that does not stay active. */
+export const KEEL_HOSTS_REFRESH_SERVICE = "keel-hosts-refresh.service";
 
 /**
  * The deploy layer's own drop-in: one name per line, sorted and deduplicated so
@@ -284,6 +286,31 @@ function serviceUnit(): Tree {
 }
 
 /**
+ * The unit the timer fires. Not `keel-hosts.service` itself: that one stays
+ * active after it ran (`RemainAfterExit=`, so the mounts can order after it and
+ * the deploy can reload it), and a timer's start job on an active unit is a
+ * no-op — worse, `OnUnitActiveSec=` counts from the unit's last activation,
+ * which for a unit that never deactivates is the boot, so the timer fired once
+ * and never again. A share's server that moved back to its old address then
+ * went unnoticed for hours, until the status page's check on it went red. This
+ * unit runs the same script and ends, so every tick is a real run.
+ */
+function refreshUnit(): Tree {
+  return file(
+    `/usr/lib/systemd/system/${KEEL_HOSTS_REFRESH_SERVICE}`,
+    dedent(`
+      [Unit]
+      Description=Re-resolve NetBIOS names of the shares into /etc/hosts
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=${RESOLVE_NETBIOS_PATH}
+    `),
+  );
+}
+
+/**
  * No `Persistent=`, unlike the backup's timers: a boot a board missed is not a
  * resolution it owes anyone, because `OnBootSec=` already runs one a couple of
  * minutes into every boot that does happen — this timer exists to keep
@@ -299,6 +326,7 @@ function timerUnit(): Tree {
       [Timer]
       OnBootSec=2min
       OnUnitActiveSec=5min
+      Unit=${KEEL_HOSTS_REFRESH_SERVICE}
 
       [Install]
       WantedBy=timers.target
@@ -307,5 +335,5 @@ function timerUnit(): Tree {
 }
 
 export function renderHosts(): Tree {
-  return merge(resolveNetbios(), serviceUnit(), timerUnit());
+  return merge(resolveNetbios(), serviceUnit(), refreshUnit(), timerUnit());
 }
