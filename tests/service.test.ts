@@ -280,9 +280,10 @@ describe("public DNS records", () => {
 
   it("leaves out an entry that never set publicDns: true", () => {
     expect(records.some((record) => record.name === privateRemote.name)).toBe(false);
-    const vaultwarden = EXAMPLE_SERVICES.find((spec) => spec.name === "vaultwarden")!;
-    expect(vaultwarden.publicDns).not.toBe(true);
-    expect(records.some((record) => record.name === vaultwarden.name)).toBe(false);
+    const template = EXAMPLE_SERVICES.find((spec) => spec.name === "vaultwarden")!;
+    const quiet = { ...template, name: "quiet", subdomain: "quiet", publicDns: false };
+    const own = publicRecords(catalogOf([quiet]), NETWORK);
+    expect(own.some((record) => record.name === quiet.name)).toBe(false);
   });
 });
 

@@ -363,6 +363,10 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     image:
       "docker.io/vaultwarden/server@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912",
     port: VAULTWARDEN_PORT,
+    // A password manager's clients sit on phones and laptops whose resolver is
+    // whatever the network handed them; the name has to resolve everywhere,
+    // and the record only says where the LAN is.
+    publicDns: true,
     memory: { max: 48, measuredMb: 30, tier: "apps" },
     // The token is stored as its argon2 hash, which is what Vaultwarden wants in
     // `ADMIN_TOKEN` — the plaintext is the item's password field and is what a
