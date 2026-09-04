@@ -117,6 +117,25 @@ export type RouteContext = {
 };
 
 /**
+ * A route to a service the board does not run.
+ *
+ * No image, no unit, no memory cap, no firewall rule and no backup: a
+ * `RemoteSpec` is the route, the LAN record and the check, and one day the
+ * public record — nothing the board itself owns. `upstream` is a full URL
+ * (`http(s)://host:port`) and the only field that names another machine.
+ * An entry for something the board runs is a `ServiceSpec`, not this.
+ */
+export type RemoteSpec = {
+  name: string;
+  description: string;
+  subdomain: string;
+  /** `http(s)://host:port` — the only field naming another machine. */
+  upstream: string;
+  auth: Auth;
+  publicDns?: boolean;
+};
+
+/**
  * The service that terminates TLS and routes to every other one.
  *
  * Swapping the proxy is writing a second value of this shape: the deploy layer
@@ -133,10 +152,10 @@ export type ProxyRole = {
    * than a sync that quietly finds nothing.
    */
   certificateStore?: CertificateStore;
-  /** One service's route file, or null for a service with no vhost. */
-  route: (spec: ServiceSpec, context: RouteContext) => string | null;
+  /** One entry's route file — service or remote — or null for a service with no vhost. */
+  route: (spec: ServiceSpec | RemoteSpec, context: RouteContext) => string | null;
   /** Where that file lands, in whichever directory the proxy watches. */
-  routePath: (spec: ServiceSpec) => string;
+  routePath: (spec: ServiceSpec | RemoteSpec) => string;
 };
 
 /**
@@ -213,6 +232,8 @@ export function alertUrl(alerts: Claimed<AlertRole>): string {
 export type Catalog = Roles & {
   /** Everything being deployed, for a reading the roles do not cover. */
   services: readonly ServiceSpec[];
+  /** Vhosts to a machine the board does not run. Empty for most deploys. */
+  remotes: readonly RemoteSpec[];
 };
 
 /**
@@ -440,8 +461,25 @@ export function roles(specs: readonly ServiceSpec[]): Roles {
 }
 
 /** Those roles beside the set they came from, which is what a setup is handed. */
-export function catalogOf(specs: readonly ServiceSpec[]): Catalog {
-  return { ...roles(specs), services: specs };
+export function catalogOf(
+  specs: readonly ServiceSpec[],
+  remotes: readonly RemoteSpec[] = [],
+): Catalog {
+  return { ...roles(specs), services: specs, remotes };
+}
+
+/**
+ * Everything with a name in the zone: every service with a vhost, plus every
+ * remote — sorted by name, which is what makes reordering either list not a
+ * restart of the resolver's hosts file.
+ */
+export function vhosts(catalog: Catalog): readonly { name: string; subdomain: string }[] {
+  return [
+    ...catalog.services
+      .filter((spec) => subdomainOf(spec) !== null)
+      .map((spec) => ({ name: spec.name, subdomain: subdomainOf(spec)! })),
+    ...catalog.remotes.map((remote) => ({ name: remote.name, subdomain: remote.subdomain })),
+  ].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -575,15 +613,56 @@ export function certSyncName(spec: ServiceSpec): string | null {
 export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const named = (specs: readonly ServiceSpec[]): string => specs.map((s) => s.name).join(", ");
+  const named = (entries: readonly { name: string }[]): string =>
+    entries.map((entry) => entry.name).join(", ");
 
-  const gated = catalog.services.filter((spec) => spec.auth === "edge");
+  const gated = [
+    ...catalog.services.filter((spec) => spec.auth === "edge"),
+    ...catalog.remotes.filter((remote) => remote.auth === "edge"),
+  ];
   if (catalog.gate === undefined && gated.length > 0) {
     errors.push(
       "no deployed entry claims the gate role, and these route through the edge gate: " +
         `${named(gated)} — each route would name a middleware nothing defines, and a router ` +
         "Traefik refuses to build fails closed silently",
     );
+  }
+
+  const oidcRemotes = catalog.remotes.filter((remote) => remote.auth === "oidc");
+  if (oidcRemotes.length > 0) {
+    errors.push(
+      `these remotes declare auth: "oidc": ${named(oidcRemotes)} — a remote runs its own flow ` +
+        "or none, because the board has no client of its own to hand it",
+    );
+  }
+
+  const remoteNameClashes = catalog.remotes.filter((remote) =>
+    catalog.services.some((spec) => spec.name === remote.name),
+  );
+  if (remoteNameClashes.length > 0) {
+    errors.push(
+      `these remotes share a name with a deployed service: ${named(remoteNameClashes)} — a ` +
+        "router and a service are one Traefik namespace by name, so the remote's route file " +
+        "would overwrite the service's",
+    );
+  }
+
+  const subdomainOwners = new Map<string, string>();
+  for (const spec of catalog.services) {
+    const subdomain = subdomainOf(spec);
+    if (subdomain !== null) subdomainOwners.set(subdomain, spec.name);
+  }
+  const subdomainClashes: string[] = [];
+  for (const remote of catalog.remotes) {
+    const owner = subdomainOwners.get(remote.subdomain);
+    if (owner !== undefined) {
+      subdomainClashes.push(`${remote.name} and ${owner} both answer '${remote.subdomain}'`);
+    } else {
+      subdomainOwners.set(remote.subdomain, remote.name);
+    }
+  }
+  if (subdomainClashes.length > 0) {
+    errors.push(`two entries answer one subdomain: ${subdomainClashes.join("; ")}`);
   }
 
   const clients = catalog.services.filter((spec) => spec.auth === "oidc");
@@ -621,9 +700,9 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
   }
 
   if (catalog.proxy === undefined) {
-    const vhosts = catalog.services.filter((spec) => subdomainOf(spec) !== null);
-    if (vhosts.length > 0) {
-      warnings.push(`no deployed proxy routes to these vhosts: ${named(vhosts)}`);
+    const stranded = catalog.services.filter((spec) => subdomainOf(spec) !== null);
+    if (stranded.length > 0) {
+      warnings.push(`no deployed proxy routes to these vhosts: ${named(stranded)}`);
     }
   }
 

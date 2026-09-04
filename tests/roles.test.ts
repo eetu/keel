@@ -18,6 +18,7 @@ import {
   dependencyNames,
   deploymentGaps,
   orderServices,
+  type RemoteSpec,
   roles,
   type ServiceSpec,
   subdomainOf,
@@ -37,6 +38,16 @@ const plain = (name: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => (
 });
 
 const PROXY = catalogOf(SERVICES).proxy!;
+
+/** Nothing from the catalog: a remote fixture for the rules below. */
+const remotePlain = (name: string, extra: Partial<RemoteSpec> = {}): RemoteSpec => ({
+  name,
+  description: "fixture",
+  subdomain: name,
+  upstream: "http://198.51.100.9:9000",
+  auth: "open",
+  ...extra,
+});
 
 describe("the roles a catalog resolves to", () => {
   it("gives the whole catalog exactly one of each", () => {
@@ -132,6 +143,44 @@ describe("what a deployed set is missing", () => {
     const gaps = deploymentGaps(catalogOf([app]));
     expect(gaps.errors).toEqual([]);
     expect(gaps.warnings.join("\n")).toMatch(/no deployed proxy routes to these vhosts: app/);
+  });
+
+  it("refuses an edge-gated remote with no gate deployed, the same as a service", () => {
+    const gated = remotePlain("gated", { auth: "edge" });
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec], [gated]));
+    expect(errors.join("\n")).toMatch(/claims the gate role.*edge gate: gated/s);
+  });
+
+  it('refuses a remote that declares auth: "oidc"', () => {
+    // A remote runs its own flow or none — the board has no client to hand a
+    // machine it does not run.
+    const client = remotePlain("client", { auth: "oidc" });
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec], [client]));
+    expect(errors.join("\n")).toMatch(/declare auth: "oidc": client/);
+  });
+
+  it("refuses a remote sharing a name with a deployed service", () => {
+    // Traefik's router and service names are one namespace by name, so the
+    // remote's route file would land on the service's own.
+    const clash = remotePlain(PROXY.spec.name);
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec], [clash]));
+    expect(errors.join("\n")).toMatch(
+      new RegExp(`share a name with a deployed service: ${PROXY.spec.name}`),
+    );
+  });
+
+  it("refuses a remote sharing a subdomain with a service", () => {
+    const app = plain("app", { subdomain: "shared" });
+    const clash = remotePlain("remote", { subdomain: "shared" });
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec, app], [clash]));
+    expect(errors.join("\n")).toMatch(/two entries answer one subdomain: remote and app/);
+  });
+
+  it("refuses two remotes sharing a subdomain", () => {
+    const first = remotePlain("first", { subdomain: "shared" });
+    const second = remotePlain("second", { subdomain: "shared" });
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec], [first, second]));
+    expect(errors.join("\n")).toMatch(/two entries answer one subdomain: second and first/);
   });
 });
 

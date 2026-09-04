@@ -28,7 +28,7 @@
  * and shows the shape. Delete it once you have your own.
  */
 
-import { type ServiceSpec } from "./spec";
+import { type RemoteSpec, type ServiceSpec } from "./spec";
 
 export const LOCAL_SERVICES: readonly ServiceSpec[] = [
   {
@@ -104,3 +104,9 @@ export const LOCAL_SERVICES: readonly ServiceSpec[] = [
   //   env: { ATLAS_LISTEN: "0.0.0.0:3010", ATLAS_DB: "/data/atlas.db" },
   // }),
 ];
+
+// A route to a machine this network reaches but the board does not run: no
+// image, no unit, no cap and no backup, only the vhost. Put one here for a
+// service on another box in the house, the way the old repository's plain
+// Traefik routers did.
+export const LOCAL_REMOTES: readonly RemoteSpec[] = [];

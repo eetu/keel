@@ -398,6 +398,18 @@ Public records (`publicDns: true`) are not yet keel's: the old repository
 created the ones that exist, and a Cloudflare provider that adopts them is
 backlog.
 
+**A route to another machine is an entry of its own shape.** A `RemoteSpec` is
+a vhost whose upstream is not on this board: it gets the route, the LAN record
+and the check, and none of what the board owns — no image, no unit, no cap, no
+firewall rule, no backup. The committed catalog ships none, the same reason the
+service one names no house: a stranger's own infrastructure has no place in an
+example everybody adopts. A remote may not share a name with a deployed
+service (Traefik's router and service names are one namespace) or a subdomain
+with a service or another remote, and `auth` means the same as it does on a
+service except `oidc`, which a remote is refused outright — it runs its own
+login flow or none, because the board has no client to hand something it does
+not run.
+
 **`merge()` refuses duplicate paths.** Two renderers writing one file is always a
 bug. Do not work around it by renaming the file.
 

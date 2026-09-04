@@ -18,6 +18,7 @@ import { EXAMPLE_SERVICES, SERVICES } from "../src/config/services";
 import {
   catalogOf,
   type Ingress,
+  type RemoteSpec,
   runSetup,
   secretFields,
   secretsPath,
@@ -200,19 +201,32 @@ describe("traefik routes", () => {
 });
 
 describe("the resolver's hosts file", () => {
+  // A remote is a vhost too, and this is the one place that has to know it —
+  // the same LAN address, from `vhosts()` rather than from `catalog.services`.
+  const remote: RemoteSpec = {
+    name: "remote-fixture",
+    description: "fixture",
+    subdomain: "remote-fixture",
+    upstream: "http://198.51.100.9:9000",
+    auth: "open",
+  };
+  const catalog = catalogOf(SERVICES, [remote]);
   const pihole = SERVICES.find((spec) => spec.name === "pihole")!;
-  const hosts = runSetup(pihole, INSTALLATION, CATALOG)?.files?.find(
+  const hosts = runSetup(pihole, INSTALLATION, catalog)?.files?.find(
     (file) => file.name === "hosts",
   );
   const lines = (hosts?.content ?? "")
     .split("\n")
     .filter((line) => line !== "" && !line.startsWith("#"));
 
-  it("names exactly the deployed vhosts, each pointing at the LAN address", () => {
-    const vhosts = SERVICES.filter((spec) => subdomainOf(spec) !== null);
-    expect(lines).toHaveLength(vhosts.length);
-    for (const spec of vhosts) {
-      expect(lines).toContain(`${NETWORK.lanAddress} ${subdomainOf(spec)}.${NETWORK.domain}`);
+  it("names exactly the deployed vhosts and remotes, each pointing at the LAN address", () => {
+    const subdomains = [
+      ...SERVICES.filter((spec) => subdomainOf(spec) !== null).map((spec) => subdomainOf(spec)!),
+      remote.subdomain,
+    ];
+    expect(lines).toHaveLength(subdomains.length);
+    for (const subdomain of subdomains) {
+      expect(lines).toContain(`${NETWORK.lanAddress} ${subdomain}.${NETWORK.domain}`);
     }
   });
 

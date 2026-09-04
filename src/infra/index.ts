@@ -21,7 +21,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 import { BACKUP_SECRET_ENV, BACKUP_VAULT_ITEM, RESTIC_IMAGE } from "../config/backup";
 import { INSTALLATION } from "../config/installation";
-import { SERVICES } from "../config/services";
+import { REMOTES, SERVICES } from "../config/services";
 import {
   alertUrl,
   catalogOf,
@@ -119,8 +119,12 @@ const mine =
  * capability an entry needs is one that will be running beside it — and two
  * entries claiming one role stops here, because there is no answer to which of
  * them a route or a client should be pointed at.
+ *
+ * Remotes are not filtered by the host's `services` list — nothing about one
+ * runs on any board, so there is no host to select it off of. What decides
+ * whether its route is ever written is the proxy gap below.
  */
-const catalog = catalogOf(mine);
+const catalog = catalogOf(mine, REMOTES);
 
 /**
  * Everything the deployed set names and would not find, raised while the plan is
@@ -398,6 +402,38 @@ for (const spec of ordered) {
     },
   );
   services.set(spec.name, service);
+}
+
+/**
+ * One route file per remote — a vhost to a machine the board does not run, so
+ * there is no unit, no cap and nothing else to build for it. `dependsOn` names
+ * nothing: a route file needs nothing running to be written, the same as a
+ * service's own.
+ *
+ * A route without a proxy to read it is a file nobody watches, so a deployed
+ * remote with no deployed proxy is refused here rather than written silently —
+ * `deploymentGaps` cannot say this on its own, because it has no resource to
+ * point at the file that would go unread.
+ */
+if (catalog.remotes.length > 0 && catalog.proxy === undefined) {
+  throw new Error(
+    `${sshTarget}: ${catalog.remotes.map((remote) => remote.name).join(", ")} route to a ` +
+      "machine off the board, and no deployed entry claims the proxy role — their route files " +
+      "would sit in a directory nothing watches",
+  );
+}
+for (const remote of catalog.remotes) {
+  new RemoteFile(`${remote.name}-route`, {
+    host: sshTarget,
+    sshArgs,
+    path: catalog.proxy!.role.routePath(remote),
+    content: catalog.proxy!.role.route(remote, {
+      domain: INSTALLATION.network.domain,
+      publicHosts: INSTALLATION.publicHosts,
+      gate: catalog.gate,
+    })!,
+    mode: "644",
+  });
 }
 
 /**

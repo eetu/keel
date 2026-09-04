@@ -15,9 +15,11 @@
 
 import { FALLBACK_DNS } from "../config/keel";
 import {
+  type Auth,
   type Claimed,
   type GateRole,
   type ProxyRole,
+  type RemoteSpec,
   type RouteContext,
   type ServiceSpec,
   subdomainOf,
@@ -229,13 +231,57 @@ export function traefikMiddlewares({ allowedRanges, gate }: TraefikOptions): str
   return lines.join("\n");
 }
 
+/**
+ * The five facts a route file is actually built from — a service's own vhost
+ * fields read down to them, or a remote's, so one renderer serves both without
+ * caring which kind of entry it was handed.
+ *
+ * `upstream` is always a full URL: `http(s)://127.0.0.1:<port>` for a service,
+ * the remote's own otherwise. A remote's `tlsUpstream` is read off that URL's
+ * scheme rather than off any field on the entry, so the two cannot disagree.
+ */
+type Routed = {
+  name: string;
+  subdomain: string;
+  auth: Auth;
+  upstream: string;
+  tlsUpstream: boolean;
+};
+
+/** A `RemoteSpec` is the only one of the two with an `upstream` — no port to build one from. */
+function isRemote(spec: ServiceSpec | RemoteSpec): spec is RemoteSpec {
+  return "upstream" in spec;
+}
+
+/** The one shape `renderTraefikRoute` renders, or null for a service with no vhost. */
+function routedOf(spec: ServiceSpec | RemoteSpec): Routed | null {
+  if (isRemote(spec)) {
+    return {
+      name: spec.name,
+      subdomain: spec.subdomain,
+      auth: spec.auth,
+      upstream: spec.upstream,
+      tlsUpstream: spec.upstream.startsWith("https:"),
+    };
+  }
+  const subdomain = subdomainOf(spec);
+  if (subdomain === null) return null;
+  return {
+    name: spec.name,
+    subdomain,
+    auth: spec.auth,
+    upstream: `${spec.tlsUpstream === true ? "https" : "http"}://127.0.0.1:${spec.port}`,
+    tlsUpstream: spec.tlsUpstream === true,
+  };
+}
+
 /** The middleware a gated router actually names. */
-function chainName(spec: ServiceSpec): string {
-  return `oauth2-chain-${spec.name}`;
+function chainName(routed: Routed): string {
+  return `oauth2-chain-${routed.name}`;
 }
 
 /**
- * The login redirect, as two middlewares per gated service.
+ * The login redirect, as two middlewares per gated entry.
  *
  * The forward-auth middleware alone is a gate and not a login: the gate refuses
  * an unauthenticated query with a status, and Traefik copies a non-2xx auth
@@ -250,13 +296,8 @@ function chainName(spec: ServiceSpec): string {
  * the cross-file `@file` reference. Order inside the chain is what makes it work:
  * the errors middleware has to be ahead of the gate to see the refusal.
  */
-function ssoMiddlewares(
-  spec: ServiceSpec,
-  subdomain: string,
-  domain: string,
-  gate: Claimed<GateRole>,
-): string[] {
-  const errors = `oauth2-errors-${spec.name}`;
+function ssoMiddlewares(routed: Routed, domain: string, gate: Claimed<GateRole>): string[] {
+  const errors = `oauth2-errors-${routed.name}`;
   return [
     "  middlewares:",
     `    ${errors}:`,
@@ -264,8 +305,8 @@ function ssoMiddlewares(
     "        status:",
     `          - "${gate.role.challengeStatus}"`,
     `        service: ${gate.spec.name}@file`,
-    `        query: "${gate.role.challenge(`https://${subdomain}.${domain}/`)}"`,
-    `    ${chainName(spec)}:`,
+    `        query: "${gate.role.challenge(`https://${routed.subdomain}.${domain}/`)}"`,
+    `    ${chainName(routed)}:`,
     "      chain:",
     "        middlewares:",
     `          - ${errors}`,
@@ -274,11 +315,11 @@ function ssoMiddlewares(
 }
 
 /**
- * One Traefik dynamic-config file per service, created and deleted with the
- * service. The `internal-only` and `sso-auth` middlewares it references come from
- * Traefik's own catalog entry, written to the same watched directory; a gated
- * service's own two middlewares are defined in the route file itself, so they are
- * created and removed with the service that is the only user of them.
+ * One Traefik dynamic-config file per entry, created and deleted with it. The
+ * `internal-only` and `sso-auth` middlewares it references come from Traefik's
+ * own catalog entry, written to the same watched directory; a gated entry's own
+ * two middlewares are defined in the route file itself, so they are created and
+ * removed with the only thing that uses them.
  *
  * Attaching `internal-only` here rather than on the container means it is applied
  * in code with a test behind it. Public TCP 443 is forwarded so the NetBird
@@ -287,49 +328,50 @@ function ssoMiddlewares(
  * Deny by default, opt out by name.
  */
 export function renderTraefikRoute(
-  spec: ServiceSpec,
+  spec: ServiceSpec | RemoteSpec,
   { domain, publicHosts = [], gate }: RouteContext,
 ): string | null {
-  const subdomain = subdomainOf(spec);
-  if (subdomain === null) return null;
+  const routed = routedOf(spec);
+  if (routed === null) return null;
+  const { name, subdomain, tlsUpstream, upstream } = routed;
 
-  const gated = spec.auth === "edge";
+  const gated = routed.auth === "edge";
   // A chain naming a middleware nothing defines is a router Traefik refuses to
   // build: the vhost stops answering, with the reason in a log nobody is reading.
   if (gated && gate === undefined) {
-    throw new Error(`${spec.name} routes through the edge gate, and no gate was resolved`);
+    throw new Error(`${name} routes through the edge gate, and no gate was resolved`);
   }
   const middlewares = [
     ...(publicHosts.includes(subdomain) ? [] : ["internal-only"]),
-    ...(gated ? [chainName(spec)] : []),
+    ...(gated ? [chainName(routed)] : []),
   ];
 
   const lines = [
     "http:",
     "  routers:",
-    `    ${spec.name}:`,
+    `    ${name}:`,
     `      rule: "Host(\`${subdomain}.${domain}\`)"`,
     "      entryPoints:",
     "        - websecure",
-    `      service: ${spec.name}`,
+    `      service: ${name}`,
     ...(middlewares.length > 0
       ? ["      middlewares:", ...middlewares.map((mw) => `        - ${mw}`)]
       : []),
     "      tls: {}",
     "  services:",
-    `    ${spec.name}:`,
+    `    ${name}:`,
     "      loadBalancer:",
-    ...(spec.tlsUpstream === true ? [`        serversTransport: ${INSECURE_TRANSPORT}`] : []),
+    ...(tlsUpstream ? [`        serversTransport: ${INSECURE_TRANSPORT}`] : []),
     "        servers:",
-    `          - url: "${spec.tlsUpstream === true ? "https" : "http"}://127.0.0.1:${spec.port}"`,
-    ...(gated && gate ? ssoMiddlewares(spec, subdomain, domain, gate) : []),
+    `          - url: "${upstream}"`,
+    ...(gated && gate ? ssoMiddlewares(routed, domain, gate) : []),
   ];
 
   return `${lines.join("\n")}\n`;
 }
 
 /** Where the route lands, in the directory the file provider watches. */
-export function routePath(spec: ServiceSpec): string {
+export function routePath(spec: ServiceSpec | RemoteSpec): string {
   return `${TRAEFIK_DYNAMIC_DIR}/${spec.name}.yaml`;
 }
 

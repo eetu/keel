@@ -56,8 +56,8 @@ import {
   traefikStatic,
 } from "../adapters/traefik";
 import { UNBOUND } from "./keel";
-import { LOCAL_SERVICES } from "./services.local";
-import { type ServiceSpec, subdomainOf } from "./spec";
+import { LOCAL_REMOTES, LOCAL_SERVICES } from "./services.local";
+import { type RemoteSpec, type ServiceSpec, vhosts } from "./spec";
 
 // Each of these is read twice — once as the port the entry declares, once
 // inside the address that entry's server is told to bind — so it is named
@@ -455,14 +455,14 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     // It is the resolver: every deployed vhost's LAN record is a line this
     // writes, into the directory dnsmasq's `hostsdir` watches.
     setup: ({ installation: { network }, catalog }) => {
-      // One line per deployed service with a web surface. `publicHosts` needs
-      // nothing of its own here — every name in it already names a subdomain
-      // one of these entries claims, and only says that name should skip
-      // Traefik's allowlist, not that it resolves to something else.
-      const vhosts = catalog.services
-        .filter((spec) => subdomainOf(spec) !== null)
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((spec) => `${network.lanAddress} ${subdomainOf(spec)}.${network.domain}`);
+      // One line per deployed vhost — a service's or a remote's, both pointing
+      // at the proxy. `publicHosts` needs nothing of its own here — every name
+      // in it already names a subdomain one of these entries claims, and only
+      // says that name should skip Traefik's allowlist, not that it resolves
+      // to something else.
+      const lines = vhosts(catalog).map(
+        (entry) => `${network.lanAddress} ${entry.subdomain}.${network.domain}`,
+      );
       return {
         files: [
           {
@@ -477,7 +477,7 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
               [
                 "# Written by the deploy from the catalog — do not edit by hand.",
                 "# Pi-hole's own local DNS records live in its web UI, not here.",
-                ...vhosts,
+                ...lines,
               ].join("\n") + "\n",
           },
         ],
@@ -493,11 +493,15 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
  * directory, so a second entry claiming one does not shadow the first: it deploys
  * a unit over it and mounts the same `/var/lib` into a different image. Pure and
  * exported so the refusal is a test rather than something a deploy discovers.
+ *
+ * Generic over `ServiceSpec` and `RemoteSpec` alike: both are named entries from
+ * the same two files, and a remote sharing a name with a service is refused
+ * elsewhere, by `deploymentGaps`, where the reason — one Traefik namespace — is.
  */
-export function composeCatalog(
-  example: readonly ServiceSpec[],
-  local: readonly ServiceSpec[],
-): readonly ServiceSpec[] {
+export function composeCatalog<T extends { name: string }>(
+  example: readonly T[],
+  local: readonly T[],
+): readonly T[] {
   const seen = new Map<string, string>();
   const duplicates: string[] = [];
   for (const [where, entries] of [
@@ -526,3 +530,13 @@ export function composeCatalog(
  * the backup set and the packet filter's reload both sort what they are given.
  */
 export const SERVICES: readonly ServiceSpec[] = composeCatalog(EXAMPLE_SERVICES, LOCAL_SERVICES);
+
+/**
+ * Keel ships no route to somebody else's machine — a `RemoteSpec` names an
+ * address, and a committed one would be one stranger's infrastructure published
+ * as everybody's example.
+ */
+export const EXAMPLE_REMOTES: readonly RemoteSpec[] = [];
+
+/** The two remote catalogs as one list, the same way the service ones compose. */
+export const REMOTES: readonly RemoteSpec[] = composeCatalog(EXAMPLE_REMOTES, LOCAL_REMOTES);

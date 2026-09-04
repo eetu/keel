@@ -18,9 +18,14 @@ import { describe, expect, it } from "vitest";
 
 import { INSTALLATION } from "../src/config/installation";
 import { IMAGE_SERVICES, priceMemory, PROFILES, tierMaxTotalMb } from "../src/config/profiles";
-import { composeCatalog, EXAMPLE_SERVICES, SERVICES } from "../src/config/services";
+import {
+  composeCatalog,
+  EXAMPLE_REMOTES,
+  EXAMPLE_SERVICES,
+  SERVICES,
+} from "../src/config/services";
 import { LOCAL_SERVICES } from "../src/config/services.local";
-import { type ServiceSpec } from "../src/config/spec";
+import { type RemoteSpec, type ServiceSpec } from "../src/config/spec";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path: string) => readFileSync(`${root}/${path}`, "utf8");
@@ -59,7 +64,7 @@ describe("the example catalog names nobody's installation", () => {
    * which is exactly right: a `setup` is where an entry is *allowed* to name the
    * house, because it is handed the installation rather than spelling it.
    */
-  const declared = (spec: ServiceSpec) => JSON.stringify(spec);
+  const declared = (spec: ServiceSpec | RemoteSpec) => JSON.stringify(spec);
 
   /**
    * The values that identify one installation. The backup share and repository
@@ -103,6 +108,17 @@ describe("the example catalog names nobody's installation", () => {
     for (const [, authority] of declared(spec).matchAll(/\bhttps?:\/\/([^/"\\\s]*)/gi)) {
       const host = authority.replace(/:\d+$/, "");
       expect(["127.0.0.1", "localhost", "[::1]"], `${spec.name}: ${authority}`).toContain(host);
+    }
+  });
+
+  it.each(EXAMPLE_REMOTES)("$name names no address but loopback and the wildcard", (remote) => {
+    // Empty today — a remote's whole point is another machine's address, which
+    // is exactly what a committed entry may never state — so this is the
+    // tripwire that keeps it that way rather than a check with anything to
+    // hold shut yet.
+    const addresses = declared(remote).match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) ?? [];
+    for (const address of addresses) {
+      expect(["0.0.0.0", "127.0.0.1"], `${remote.name}: ${address}`).toContain(address);
     }
   });
 

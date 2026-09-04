@@ -20,7 +20,7 @@ import process from "node:process";
 
 import { INSTALLATION } from "../config/installation";
 import { PROFILES, resolveMemory } from "../config/profiles";
-import { SERVICES } from "../config/services";
+import { REMOTES, SERVICES } from "../config/services";
 import {
   backupPath,
   catalogOf,
@@ -81,7 +81,7 @@ if (profile === undefined) {
 }
 
 const { domain } = INSTALLATION.network;
-const catalog = catalogOf(SERVICES);
+const catalog = catalogOf(SERVICES, REMOTES);
 const setup = runSetup(spec, INSTALLATION, catalog);
 const subdomain = subdomainOf(spec);
 
