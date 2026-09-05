@@ -24,6 +24,8 @@ import { REMOTES, SERVICES } from "../config/services";
 import {
   backupPath,
   catalogOf,
+  metricsAccountEmail,
+  metricsSecretsPath,
   runSetup,
   secretFields,
   secretsPath,
@@ -119,6 +121,20 @@ const resolved = {
       ]),
     ),
   },
+  // An account the deploy creates on another service rather than reads: what is
+  // printable about it is the address, the role and where it lands, because the
+  // password does not exist until the resource runs and is sealed in the same
+  // call that makes it.
+  metricsAccount:
+    spec.metricsAccount === undefined
+      ? null
+      : {
+          hub: catalog.metrics?.spec.name ?? null,
+          email: metricsAccountEmail(spec, domain),
+          role: spec.metricsAccount.role,
+          path: metricsSecretsPath(spec),
+          variables: [spec.metricsAccount.env.user, spec.metricsAccount.env.password],
+        },
   mounts: spec.mounts ?? [],
   backupPath: backupPath(spec),
   backupExclude: spec.backupExclude ?? [],

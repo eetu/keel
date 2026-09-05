@@ -322,7 +322,10 @@ for (const spec of ordered) {
   // file is ciphertext and a hash; the identity that opens it lives only on the
   // host, and the plaintext exists only inside the provider's own call.
   const needsSecrets = secretsPath(spec) !== null && spec.secretEnv !== undefined;
-  if (needsSecrets && ageRecipient === undefined) {
+  // A generated credential is sealed for the board in the resource that makes
+  // it, so an entry with an account on another service needs the identity for
+  // exactly the reason a vault-read secret does.
+  if ((needsSecrets || spec.metricsAccount !== undefined) && ageRecipient === undefined) {
     throw new Error(
       `${spec.name} needs secrets but ${sshTarget} has no ageRecipient — ` +
         "generate an identity on the host and record its public half",
@@ -385,6 +388,10 @@ for (const spec of ordered) {
       extraEnv: setup?.env,
       files: setup?.files,
       catalog,
+      // The same edges, as the resources themselves: a credential this service's
+      // own resources generate is created by calling a service that is up.
+      needs,
+      ageRecipient,
       sshArgs,
     },
     // The network files have to be in place before anything joins one, and the

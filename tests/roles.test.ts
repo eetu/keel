@@ -39,6 +39,23 @@ const plain = (name: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => (
 
 const PROXY = catalogOf(SERVICES).proxy!;
 
+/**
+ * A metrics hub, as a fixture: the role is two facts about an API, and nothing
+ * in the committed catalog claims it — so what is asserted stays the rule.
+ */
+const HUB = plain("hub", {
+  subdomain: "hub",
+  metrics: {
+    superuser: { user: "username", password: "password" },
+    api: {
+      health: "/api/health",
+      superuserAuth: "/api/collections/_superusers/auth-with-password",
+      users: "/api/collections/users/records",
+      systems: "/api/collections/systems/records",
+    },
+  },
+});
+
 /** Nothing from the catalog: a remote fixture for the rules below. */
 const remotePlain = (name: string, extra: Partial<RemoteSpec> = {}): RemoteSpec => ({
   name,
@@ -120,6 +137,19 @@ describe("what a deployed set is missing", () => {
       deploymentGaps(catalogOf([PROXY.spec, identity, { ...client, egress: "host" as const }]))
         .errors,
     ).toEqual([]);
+  });
+
+  it("refuses an account on a metrics hub nothing deploys", () => {
+    // The account is created by calling the hub, so with no hub there is nothing
+    // to call — and the env file the service reads its login out of would never
+    // be written, leaving it started with two variables unset.
+    const reader = plain("reader", {
+      metricsAccount: { role: "readonly", env: { user: "HUB_USER", password: "HUB_PASSWORD" } },
+    });
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec, reader]));
+    expect(errors.join("\n")).toMatch(/claims the metrics role.*account on it: reader/s);
+    // With a hub beside it the same entry has no gap at all.
+    expect(deploymentGaps(catalogOf([PROXY.spec, HUB, reader])).errors).toEqual([]);
   });
 
   it("refuses a certificate reader with no store to read from", () => {
@@ -220,6 +250,17 @@ describe("the order a deployed set is started in", () => {
   it("derives a certificate reader's edge from the store it reads", () => {
     const reader = plain("reader", { certificates: { dir: "/etc/reader/certs" } });
     expect(dependencyNames(reader, catalogOf([PROXY.spec, reader]))).toEqual([PROXY.spec.name]);
+  });
+
+  it("derives an account holder's edge from the hub that issues it", () => {
+    // Also written down nowhere: the account is created by calling the hub's
+    // API, so the hub has to be answering before the resource that makes it
+    // runs. The same reading as the client and the issuer.
+    const reader = plain("reader", {
+      metricsAccount: { role: "readonly", env: { user: "HUB_USER", password: "HUB_PASSWORD" } },
+    });
+    expect(dependencyNames(reader, catalogOf([HUB, reader]))).toEqual([HUB.name]);
+    expect(order([reader, HUB])).toEqual([HUB.name, "reader"]);
   });
 
   it("derives nothing from a vhost", () => {

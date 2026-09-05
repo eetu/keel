@@ -390,6 +390,25 @@ signals. The trade is the one an OIDC client makes — reaching every service's
 loopback port means running on the host's own network stack, past the route
 allowlist and the gate both.
 
+**A credential only two machines need is generated where it is used.** The
+metrics hub's read-only account for the dashboard is created by the deploy: the
+entry declares `metricsAccount` and the two variables its application reads the
+login out of, the hub is whichever entry claims the `metrics` role, and
+`MetricsAccount` (`src/infra/providers/metricsAccount.ts`) authenticates as the
+hub's superuser, upserts the account, assigns it to every system, **generates the
+password inside the call and seals it for the host in the same one**. So it is in
+no vault, in no state file and in nobody's clipboard — it lands as
+`/etc/secrets/<name>.metrics.env.age` and reaches the container as a second
+`EnvironmentFile=`. That follows the rule rather than bending it: keel makes no
+vault writes, so a generated secret that had to be stored would have needed one,
+and a password no person ever types loses nothing by nobody knowing it. `read`
+asks the hub whether the account still exists — gone in its UI is gone here, and
+the next deploy creates it again with a fresh password — and never re-generates,
+because a rotation on every refresh would restart the consumer for no change. A
+`metricsAccount` with no hub deployed is a `deploymentGaps` error, and the
+account's resource is ordered behind the hub's unit, because an account is made
+by calling something that answers.
+
 **A LAN name is a line in a hosts file the resolver re-reads.** Pi-hole's own
 `setup` derives the record set from `catalog.services` into
 `/var/lib/pihole/hosts/keel.list`, one `<lanAddress> <subdomain>.<domain>` line

@@ -2,6 +2,7 @@ import { NETWORKS } from "../config/keel";
 import {
   certSyncName,
   dependencyNames,
+  metricsSecretsPath,
   type Roles,
   secretsPath,
   type ServiceSpec,
@@ -102,7 +103,10 @@ export function renderQuadlet(
   roles: Roles = {},
 ): string {
   const egress = spec.egress ?? "internal";
-  const secrets = secretsPath(spec);
+  // Both env files are derived from the entry rather than passed in, which is
+  // what keeps this a pure function of a spec: what a deploy writes and what a
+  // golden pins cannot differ, because there is one reading of the declaration.
+  const envFiles = [secretsPath(spec), metricsSecretsPath(spec)].filter((path) => path !== null);
 
   const env = { ...spec.env };
   for (const [name, value] of Object.entries(extraEnv)) {
@@ -125,7 +129,7 @@ export function renderQuadlet(
   const after = [
     "network-online.target",
     "boot-complete.target",
-    ...(secrets ? ["keel-secrets.service"] : []),
+    ...(envFiles.length > 0 ? ["keel-secrets.service"] : []),
     // The same edges the deploy layer orders its resources by — the written ones
     // and the derived ones alike — so a boot starts these in the order the first
     // deploy did. Ordering only: `After=` on a unit that fails does not hold this
@@ -166,7 +170,10 @@ export function renderQuadlet(
         ? `Environment=${key}="${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
         : `Environment=${key}=${value}`,
     ),
-    ...(secrets ? [`EnvironmentFile=${secrets}`] : []),
+    // The entry's own sealed environment, and then the account the deploy
+    // generated for it on another service. Two files because two resources write
+    // them and they rotate for different reasons; podman reads both.
+    ...envFiles.map((path) => `EnvironmentFile=${path}`),
     ...(spec.cmd ? [`Exec=${spec.cmd}`] : []),
     ...(spec.healthCmd
       ? [

@@ -18,6 +18,7 @@ import { EXAMPLE_SERVICES, SERVICES } from "../src/config/services";
 import {
   catalogOf,
   type Ingress,
+  metricsSecretsPath,
   publicRecords,
   type RemoteSpec,
   runSetup,
@@ -151,12 +152,15 @@ describe.each(SERVICES)("$name quadlet", (spec) => {
   });
 
   it("references secrets by path and waits for them", () => {
-    const secrets = secretsPath(spec);
-    if (secrets === null) {
+    // Both blobs, whichever of them this entry has: one sealed from the vault
+    // fields it names, one from an account another service issued it. Neither is
+    // a value in the unit, and either is a reason to wait for the decrypt.
+    const sealed = [secretsPath(spec), metricsSecretsPath(spec)].filter((path) => path !== null);
+    if (sealed.length === 0) {
       expect(quadlet).not.toContain("EnvironmentFile=");
       return;
     }
-    expect(quadlet).toContain(`EnvironmentFile=${secrets}`);
+    for (const path of sealed) expect(quadlet).toContain(`EnvironmentFile=${path}`);
     expect(quadlet).toContain("keel-secrets.service");
     // The spec carries field *names*; the values are read at deploy time and
     // sealed, so nothing here or in state is a plaintext.
@@ -368,6 +372,51 @@ describe("one entry is the whole declaration", () => {
       for (const file of files) expect(file.path.startsWith("/"), file.path).toBe(true);
       expect(new Set(files.map((file) => file.name)).size).toBe(files.length);
     }
+  });
+});
+
+describe("the env files a container reads", () => {
+  const template = EXAMPLE_SERVICES.find((spec) => spec.name === "vaultwarden")!;
+  const account = {
+    role: "readonly",
+    env: { user: "HUB_USER", password: "HUB_PASSWORD" },
+  } as const;
+
+  it("adds one for a credential the deploy generates, beside the one it reads", () => {
+    // Two files because two resources write them: the vault-read half is sealed
+    // from field names on the entry, the generated half inside the resource that
+    // creates the account. `keel-secrets.service` decrypts whatever `*.age` it
+    // finds, so the second costs the device nothing — and the unit waits for
+    // that one unit either way.
+    const both = renderQuadlet({ ...template, name: "both", metricsAccount: account });
+    expect(both).toContain("EnvironmentFile=/etc/secrets/both.env");
+    expect(both).toContain("EnvironmentFile=/etc/secrets/both.metrics.env");
+    expect(both).toContain("keel-secrets.service");
+  });
+
+  it("waits for the decrypt even when the generated one is all it has", () => {
+    // An entry can hold an account and no vault fields at all: the ordering has
+    // to follow from either file, not from `secretEnv` alone, or the container
+    // starts before the blob beside it has been opened.
+    const only = renderQuadlet({
+      ...template,
+      name: "only",
+      secretEnv: undefined,
+      metricsAccount: account,
+    });
+    expect(only).not.toContain("EnvironmentFile=/etc/secrets/only.env\n");
+    expect(only).toContain("EnvironmentFile=/etc/secrets/only.metrics.env");
+    expect(only).toContain("keel-secrets.service");
+  });
+
+  it("names one for an entry that declares no account, and none for an entry with neither", () => {
+    // The property the committed golden rests on: a spec that declares nothing
+    // new renders exactly what it rendered before.
+    const plain = renderQuadlet({ ...template, name: "plain" });
+    expect(plain.match(/^EnvironmentFile=/gm)).toHaveLength(1);
+    const bare = renderQuadlet({ ...template, name: "bare", secretEnv: undefined });
+    expect(bare).not.toContain("EnvironmentFile=");
+    expect(bare).not.toContain("keel-secrets.service");
   });
 });
 

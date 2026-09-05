@@ -207,6 +207,52 @@ export type AlertRole = {
   topic: string;
 };
 
+/**
+ * The metrics hub a client of it gets an account on.
+ *
+ * Two facts and nothing about which product it is: where the superuser's login
+ * sits on the hub's own vault item, and the API paths a PocketBase speaks. The
+ * paths are here rather than in the provider so that the provider spells no
+ * product's API into itself — it is "create an account on the hub", and which
+ * URLs that is remains the entry's to say.
+ */
+export type MetricsRole = {
+  /** Vault field names on the hub's own item holding the superuser login. */
+  superuser: { user: string; password: string };
+  /** PocketBase paths, so the provider spells no product's API into itself. */
+  api: MetricsApi;
+};
+
+/** The four calls creating an account on the hub takes. */
+export type MetricsApi = {
+  /** Answers once the hub is serving; polled before anything is created. */
+  health: string;
+  /** Exchanges the superuser's login for a token the other three carry. */
+  superuserAuth: string;
+  /** The account collection: looked up by email, created or patched by id. */
+  users: string;
+  /** The monitored machines, each of which the account is assigned to. */
+  systems: string;
+};
+
+/**
+ * An account on the metrics hub, created by the deploy for the service that
+ * reads it.
+ *
+ * `env` names the two variables *the application* reads the login out of,
+ * because that is the application's vocabulary and not the deployment's — the
+ * same reason a template states nothing about a service's bind or its database
+ * path. What the deployment owns is the rest: the account exists on whichever
+ * entry claims the metrics role, its password is generated where it is sealed,
+ * and it reaches the container as an env file of its own.
+ */
+export type MetricsAccount = {
+  /** What the account may do on the hub. A page that draws graphs asks for `readonly`. */
+  role: "readonly" | "user";
+  /** The variables the application reads the account's email and password out of. */
+  env: { user: string; password: string };
+};
+
 /** A role and the entry that claims it — which is what a consumer of one needs. */
 export type Claimed<R> = { spec: ServiceSpec; role: R };
 
@@ -216,6 +262,7 @@ export type Roles = {
   identity?: Claimed<IdentityRole>;
   gate?: Claimed<GateRole>;
   alerts?: Claimed<AlertRole>;
+  metrics?: Claimed<MetricsRole>;
 };
 
 /**
@@ -414,6 +461,15 @@ export type ServiceSpec = {
   identity?: IdentityRole;
   gate?: GateRole;
   alerts?: AlertRole;
+  metrics?: MetricsRole;
+  /**
+   * An account on the metrics hub, created by the deploy rather than by a
+   * person: the password is generated inside the resource that seals it, so it
+   * exists in no vault and in no state file. Declaring it is what creates the
+   * account, the blob it is sealed into and the second `EnvironmentFile=` the
+   * container reads it from.
+   */
+  metricsAccount?: MetricsAccount;
   /**
    * The half of this service's configuration that names the installation. It is
    * declared on the entry so that a service is one entry: nothing outside the
@@ -425,7 +481,7 @@ export type ServiceSpec = {
 };
 
 /** The role fields, which are the keys `roles()` resolves. */
-type RoleKey = "proxy" | "identity" | "gate" | "alerts";
+type RoleKey = "proxy" | "identity" | "gate" | "alerts" | "metrics";
 
 /**
  * The entry claiming one role, or undefined when nothing being deployed does.
@@ -450,13 +506,17 @@ function claimant<K extends RoleKey>(
   return spec === undefined ? undefined : { spec, role: spec[role]! };
 }
 
-/** Which entry is the proxy, the identity provider, the gate and the alert sink, by presence. */
+/**
+ * Which entry is the proxy, the identity provider, the gate, the alert sink and
+ * the metrics hub, by presence.
+ */
 export function roles(specs: readonly ServiceSpec[]): Roles {
   return {
     proxy: claimant(specs, "proxy"),
     identity: claimant(specs, "identity"),
     gate: claimant(specs, "gate"),
     alerts: claimant(specs, "alerts"),
+    metrics: claimant(specs, "metrics"),
   };
 }
 
@@ -508,14 +568,16 @@ export function publicRecords(
 /**
  * What has to be running before one entry is started, by name.
  *
- * Two derived edges and whatever the entry wrote down. A service that runs an
+ * Three derived edges and whatever the entry wrote down. A service that runs an
  * OIDC client of its own is started after the identity provider it asks, because
  * the discovery document is fetched at startup and a client that cannot reach its
  * issuer exits. A service that reads a certificate out of the proxy's store is
  * started after the proxy, because the store is the proxy's file and an empty one
- * is what a reader finds before the proxy has issued anything.
+ * is what a reader finds before the proxy has issued anything. A service with an
+ * account on the metrics hub is started after the hub, because the account is
+ * created by calling it and a hub that is not answering has nothing to create.
  *
- * Both are read off declarations the entry already makes, so neither is a name
+ * All three are read off declarations the entry already makes, so none is a name
  * matched here. `dependsOn` is the rest: an edge nothing implies, stated once.
  */
 export function dependencyNames(spec: ServiceSpec, roles: Roles): readonly string[] {
@@ -523,6 +585,9 @@ export function dependencyNames(spec: ServiceSpec, roles: Roles): readonly strin
     ...(spec.auth === "oidc" && roles.identity !== undefined ? [roles.identity.spec.name] : []),
     ...(spec.certificates !== undefined && roles.proxy !== undefined
       ? [roles.proxy.spec.name]
+      : []),
+    ...(spec.metricsAccount !== undefined && roles.metrics !== undefined
+      ? [roles.metrics.spec.name]
       : []),
   ];
   return [...new Set([...derived, ...(spec.dependsOn ?? [])])].filter((name) => name !== spec.name);
@@ -712,6 +777,15 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
     );
   }
 
+  const accounts = catalog.services.filter((spec) => spec.metricsAccount !== undefined);
+  if (catalog.metrics === undefined && accounts.length > 0) {
+    errors.push(
+      "no deployed entry claims the metrics role, and these are deployed with an account on " +
+        `it: ${named(accounts)} — there is no hub for the deploy to create one on, and the ` +
+        "env file each of them reads its login out of would never be written",
+    );
+  }
+
   const readers = catalog.services.filter((spec) => spec.certificates !== undefined);
   if (readers.length > 0 && catalog.proxy?.role.certificateStore === undefined) {
     errors.push(
@@ -735,6 +809,32 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
 /** Where a service's decrypted env file lands, or null when it has no secrets. */
 export function secretsPath(spec: ServiceSpec): string | null {
   return spec.secretEnv === undefined ? null : `/etc/secrets/${spec.name}.env`;
+}
+
+/**
+ * Where the metrics account's decrypted env file lands, or null for a service
+ * that has no account on the hub.
+ *
+ * A file of its own rather than lines in the one above: the vault-read half and
+ * the generated half rotate for different reasons and are written by different
+ * resources, and `keel-secrets.service` decrypts whatever `*.age` it finds, so a
+ * second blob costs nothing on the device.
+ */
+export function metricsSecretsPath(spec: ServiceSpec): string | null {
+  return spec.metricsAccount === undefined ? null : `/etc/secrets/${spec.name}.metrics.env`;
+}
+
+/**
+ * The address the account is created under: the service's own name in the
+ * fleet's zone.
+ *
+ * Derived rather than declared, because it identifies a machine account and
+ * nobody reads mail at it — and a name typed into a catalog twice is a name that
+ * can disagree with itself, which on the hub is a second account rather than an
+ * error.
+ */
+export function metricsAccountEmail(spec: ServiceSpec, domain: string): string {
+  return `${spec.name}@${domain}`;
 }
 
 /**

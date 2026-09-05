@@ -2,12 +2,13 @@
  * One service, declared once.
  *
  * A `Service` fans a single `ServiceSpec` out into every resource that service
- * needs: the quadlet, its memory caps, the systemd unit that runs it, and the
- * route file the proxy serves it on. The ports the packet filter admits to it
- * are published rather than written, because that file belongs to the host
- * rather than to any one service. The seams for the resources that need their
- * own providers — the DNS record, the OIDC client the identity provider
- * registers — are marked below and land with those providers.
+ * needs: the quadlet, its memory caps, the systemd unit that runs it, the route
+ * file the proxy serves it on, and any credential another service issues it —
+ * generated and sealed where it is used, never stored anywhere in between. The
+ * ports the packet filter admits to it are published rather than written,
+ * because that file belongs to the host rather than to any one service. The
+ * seam for the one resource that still needs its own provider — the OIDC client
+ * the identity provider registers — is marked below and lands with it.
  *
  * This is the part that stops being a per-service task file. Under pyinfra the
  * same service was spread across `tasks/<svc>.py`, a `ROUTES` tuple in
@@ -23,10 +24,19 @@ import * as pulumi from "@pulumi/pulumi";
 
 import { INSTALLATION } from "../config/installation";
 import { selectProfile } from "../config/profiles";
-import { backupPath, type Catalog, secretsPath, type ServiceSpec } from "../config/spec";
+import {
+  backupPath,
+  type Catalog,
+  metricsAccountEmail,
+  metricsSecretsPath,
+  secretsPath,
+  serviceOrigin,
+  type ServiceSpec,
+} from "../config/spec";
 import { type ServiceFile } from "../config/types";
 import { memoryDropInPath, serviceDropIn } from "../render/memory";
 import { quadletPath, renderQuadlet } from "../render/quadlet";
+import { MetricsAccount } from "./providers/metricsAccount";
 import { RemoteFile } from "./providers/remoteFile";
 import { SecretFile } from "./providers/secretFile";
 import { SystemdUnit } from "./providers/systemdUnit";
@@ -70,6 +80,20 @@ export type ServiceArgs = {
    * `auth: "edge"` is sent through.
    */
   catalog: Catalog;
+  /**
+   * The resources of the services this one is started after — the same edges
+   * `dependencyNames` derives, as the units themselves. A credential generated
+   * on another service is created against a hub that is answering, and that is
+   * what makes it so.
+   */
+  needs?: readonly pulumi.Resource[];
+  /**
+   * Public half of the age identity on the board, for the credentials this
+   * service's own resources generate. A vault-read secret is sealed before it
+   * reaches here; a generated one is sealed inside the resource that makes it,
+   * which is why the recipient is needed at this level too.
+   */
+  ageRecipient?: string;
   /** Extra ssh arguments, for reaching a host that is not in the real ssh_config. */
   sshArgs?: readonly string[];
 };
@@ -82,7 +106,19 @@ export default class Service extends pulumi.ComponentResource {
   public readonly unit: SystemdUnit;
 
   constructor(args: ServiceArgs, opts?: pulumi.ComponentResourceOptions) {
-    const { host, spec, ramMb, image, sealedEnv, extraEnv, files = [], catalog, sshArgs } = args;
+    const {
+      host,
+      spec,
+      ramMb,
+      image,
+      sealedEnv,
+      extraEnv,
+      files = [],
+      catalog,
+      needs = [],
+      ageRecipient,
+      sshArgs,
+    } = args;
     super("keel:index:Service", spec.name, {}, opts);
     const parent = { parent: this };
 
@@ -120,6 +156,54 @@ export default class Service extends pulumi.ComponentResource {
             parent,
           )
         : undefined;
+
+    // An account on another service, generated rather than read: the entry says
+    // it needs one and which two variables it reads the login out of, the hub is
+    // whichever entry claims the metrics role, and the password is created and
+    // sealed inside the resource — so it is in no vault and in no state file.
+    // Ordered behind the same services the container is, because the account is
+    // made by calling the hub and a hub that is not up has nothing to make.
+    //
+    // A consumer with no hub deployed is one of the gaps refused before any of
+    // this is built, so there is no branch here for a declaration with nothing
+    // to satisfy it.
+    const metricsPath = metricsSecretsPath(spec);
+    const account =
+      spec.metricsAccount === undefined || catalog.metrics === undefined || !ageRecipient
+        ? undefined
+        : new MetricsAccount(
+            `${spec.name}-metrics-account`,
+            {
+              vault: INSTALLATION.vault,
+              item: catalog.metrics.spec.vaultItem ?? catalog.metrics.spec.name,
+              // Its own vhost, because that is how this machine reaches the hub:
+              // the deploy runs off the board, where a loopback port is not the
+              // board's. The route admits the LAN and the mesh, which is where a
+              // deploy is run from.
+              hubUrl: serviceOrigin(catalog.metrics.spec, INSTALLATION.network.domain),
+              email: metricsAccountEmail(spec, INSTALLATION.network.domain),
+              role: spec.metricsAccount.role,
+              api: catalog.metrics.role.api,
+              superuser: catalog.metrics.role.superuser,
+              envNames: spec.metricsAccount.env,
+              ageRecipient,
+            },
+            { ...parent, dependsOn: [...needs] },
+          );
+    const metricsFile =
+      account === undefined || metricsPath === null
+        ? undefined
+        : new SecretFile(
+            `${spec.name}-metrics-secret`,
+            {
+              host,
+              sshArgs,
+              path: `${metricsPath}.age`,
+              ciphertext: account.ciphertext,
+              plaintextHash: account.plaintextHash,
+            },
+            parent,
+          );
 
     // The route is the proxy's file: which dialect it is written in and where it
     // lands are the proxy role's to say, and the gate a gated route asks is
@@ -180,6 +264,7 @@ export default class Service extends pulumi.ComponentResource {
       ...extraFiles,
       ...(routeFile ? [routeFile] : []),
       ...(secretFile ? [secretFile] : []),
+      ...(metricsFile ? [metricsFile] : []),
     ];
     this.unit = new SystemdUnit(
       spec.name,
@@ -188,11 +273,17 @@ export default class Service extends pulumi.ComponentResource {
         sshArgs,
         unit: `${spec.name}.service`,
         quadlet: true,
-        trigger: pulumi.all([quadlet, sealedEnv?.plaintextHash ?? ""]).apply(([body, secretHash]) =>
-          // Each part hashed before it is joined: fixed-length pieces cannot run
-          // together, so a boundary shifting between two of them is a change.
-          sha256([body, memory, ...restarting, secretHash].map(sha256).join("")),
-        ),
+        trigger: pulumi
+          .all([quadlet, sealedEnv?.plaintextHash ?? "", account?.plaintextHash ?? ""])
+          .apply(([body, secretHash, accountHash]) =>
+            // Each part hashed before it is joined: fixed-length pieces cannot
+            // run together, so a boundary shifting between two of them is a
+            // change. The generated credential joins the secret's own part
+            // rather than becoming another one — a new part would change every
+            // trigger in the fleet, restarting the resolver, the proxy and the
+            // identity provider for a field none of them has.
+            sha256([body, memory, ...restarting, secretHash + accountHash].map(sha256).join("")),
+          ),
       },
       { ...parent, dependsOn: deps },
     );
@@ -201,10 +292,10 @@ export default class Service extends pulumi.ComponentResource {
     // cannot disagree about where a service keeps its state.
     this.backupPath = backupPath(spec) ?? undefined;
 
-    // Still to land: a DNS record for a service with a subdomain, and an OIDC
-    // client registered with the identity role for one with `auth: "oidc"`, whose
-    // generated secret flows into the encrypted env blob inside the same run —
-    // no second deploy.
+    // Still to land: an OIDC client registered with the identity role for a
+    // service with `auth: "oidc"`, whose generated secret flows into an
+    // encrypted env blob inside the same run — the shape the account above
+    // already has, with the identity provider in the hub's place.
 
     this.registerOutputs({ backupPath: this.backupPath });
   }
