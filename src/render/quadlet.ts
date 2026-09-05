@@ -4,6 +4,7 @@ import {
   dependencyNames,
   metricsSecretsPath,
   type Roles,
+  SECRETS_DIR,
   secretsPath,
   type ServiceSpec,
 } from "../config/spec";
@@ -108,6 +109,16 @@ export function renderQuadlet(
   // golden pins cannot differ, because there is one reading of the declaration.
   const envFiles = [secretsPath(spec), metricsSecretsPath(spec)].filter((path) => path !== null);
 
+  // Whatever this container reads out of the secrets directory, however it reads
+  // it: an env file derived above, or a file it mounts — a server configuration
+  // whose body is key material is a `Volume=` line rather than an
+  // `EnvironmentFile=`, and it wants the decrypt just as much. Read off the
+  // mount's source, so the ordering follows from the declaration and no entry
+  // names the unit.
+  const readsSecrets =
+    envFiles.length > 0 ||
+    (spec.mounts ?? []).some((mount) => mount.split(":")[0].startsWith(`${SECRETS_DIR}/`));
+
   const env = { ...spec.env };
   for (const [name, value] of Object.entries(extraEnv)) {
     if (name in env) throw new Error(`${spec.name} sets ${name} in both its spec and extraEnv`);
@@ -129,7 +140,7 @@ export function renderQuadlet(
   const after = [
     "network-online.target",
     "boot-complete.target",
-    ...(envFiles.length > 0 ? ["keel-secrets.service"] : []),
+    ...(readsSecrets ? ["keel-secrets.service"] : []),
     // The same edges the deploy layer orders its resources by — the written ones
     // and the derived ones alike — so a boot starts these in the order the first
     // deploy did. Ordering only: `After=` on a unit that fails does not hold this

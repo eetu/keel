@@ -15,7 +15,13 @@
  * match.
  */
 
-import { type Installation, type Network, type ServiceFile, type ServiceMemory } from "./types";
+import {
+  type Installation,
+  type Network,
+  type ServiceFile,
+  type ServiceMemory,
+  type ServiceSecretFile,
+} from "./types";
 
 export type Egress =
   /** No route off the host. The default: a service earns internet access. */
@@ -141,6 +147,18 @@ export type Router = {
   scheme?: "h2c";
   /** Higher wins. Traefik's default is the rule's length, so state it. */
   priority: number;
+  /**
+   * `"internal"` keeps the LAN allowlist on this router even where the vhost has
+   * opted out of it — the one direction a router may differ from its vhost.
+   *
+   * A router may be stricter than the name it answers on and never looser, which
+   * is what keeps "who may reach this" a property of the vhost: nothing added
+   * here can widen it. What it is for is a path on an internet-facing vhost that
+   * has no business being answered from the internet — netbird's `/api/setup`,
+   * the unauthenticated call that claims the coordinator's one account, is the
+   * case it exists for.
+   */
+  reach?: "internal";
 };
 
 /**
@@ -280,6 +298,243 @@ export type MetricsAccount = {
   env: { user: string; password: string };
 };
 
+/**
+ * The paths claiming a service's first account takes, so the provider that
+ * claims it spells no product's API into itself — the same division `MetricsApi`
+ * draws. Which URLs this is remains the entry's to say; the provider's subject
+ * is "claim the first account and keep the token it answers with".
+ */
+export type BootstrapApi = {
+  /** GET — answers once the service is serving, and says whether it is still unclaimed. */
+  instance: string;
+  /** The field in that answer that is true while no account exists. */
+  requiredKey: string;
+  /** POST — claims the account and mints the token every later call carries. */
+  setup: string;
+  /**
+   * GET — the account the token belongs to. It is the liveness check as well as
+   * the lookup: a token the service no longer accepts is a 401 here, and one it
+   * does accept names the account, so one call answers both questions.
+   */
+  accounts: string;
+  /** The upstream identity providers the service's own broker federates to. */
+  connectors: string;
+  /** The scheme the `Authorization` header carries the token under. */
+  authScheme: string;
+};
+
+/**
+ * An upstream identity provider registered on the service's own broker, so that
+ * signing in to it is the fleet's single sign-on.
+ *
+ * The issuer is not here: it comes from whichever entry claims the identity
+ * role, asked for the client this is registered as, the same way every other
+ * OIDC client in this repository gets one. What the entry states is the two
+ * halves the role cannot know — the name the connector is found again by, and
+ * where the identity provider filed the client secret it generated.
+ */
+export type BootstrapConnector = {
+  /** The connector's name on the service. It is matched by this and never by id. */
+  name: string;
+  /** The client id it is registered under at the identity provider. */
+  clientId: string;
+  /** Item and field the identity provider's generated client secret sits on. */
+  secret: { item: string; field: string };
+};
+
+/**
+ * The first account on a service that refuses to be configured until it has one,
+ * claimed by the deploy rather than by a person at a wizard.
+ *
+ * The account is the mesh's owner and the token it answers with is what every
+ * later call authenticates as, so this is the one declaration whose product is a
+ * credential that has to leave the provider. `token` names where a hand-minted
+ * one is read from when the account already exists and this resource has none —
+ * the only path a person walks, and the one the provider's error names.
+ */
+export type BootstrapAccount = {
+  /**
+   * The owner's display name on the account. Not its address: that is
+   * `deployedAccountEmail`, derived from the entry's name in the fleet's zone
+   * for the same reason the hub account's is — an address typed into a catalog
+   * is one that can disagree with itself, and on the far side that is a second
+   * account rather than an error.
+   */
+  name: string;
+  /** How long a minted token lives, in days. The API caps this at 365. */
+  tokenDays: number;
+  /** Item and field a hand-minted token is read from. Names only, never a value. */
+  token: { item: string; field: string };
+  /** The paths this takes, in the service's own dialect. */
+  api: BootstrapApi;
+  /** The upstream identity provider to federate to, if the service brokers one. */
+  connector?: BootstrapConnector;
+};
+
+/**
+ * The overlay's account-wide settings — the ranges every peer is numbered out
+ * of and the policies that apply to all of them.
+ *
+ * Composed by the entry's `setup` from the installation rather than typed here,
+ * because the ranges already exist on `Installation.mesh` and are read by the
+ * proxy's allowlist and by the coordinator's own configuration file. A second
+ * copy on the entry is a copy that can disagree with those, and a mesh numbered
+ * out of a range the allowlist does not admit is a peer that connects and
+ * reaches nothing.
+ */
+export type MeshSettings = {
+  /** The overlay's v4 range, in CIDR. */
+  networkRange: string;
+  /** The DNS suffix every peer's own name is published under. */
+  dnsDomain: string;
+  /**
+   * Whether an SSO-enrolled peer has to re-authenticate in a browser on a
+   * schedule. Off where the identity provider's vhost admits the LAN and the
+   * mesh alone: a peer away from home cannot reach the login it would be sent
+   * to, so the expiry is a peer that strands rather than one that re-signs in.
+   */
+  peerLoginExpirationEnabled: boolean;
+  /** Whether the routing peer answers DNS for the networks it carries. */
+  routingPeerDnsResolutionEnabled: boolean;
+  /** Whether group membership is read out of the login's own token claims. */
+  jwtGroupsEnabled: boolean;
+  /** The groups such a claim may name. Empty while the reading above is off. */
+  jwtAllowGroups: readonly string[];
+};
+
+/**
+ * A key a device enrols with, which is the whole of how a peer joins without a
+ * browser.
+ *
+ * The plaintext is shown once, by the call that creates it — so it is a secret
+ * output of the resource that made it and lives in state under the stack
+ * passphrase, the same trade the account's own token makes. Nobody copies it
+ * anywhere: the board's agent will read it from there, and a person recovering
+ * a lost phone reads it out of the same place.
+ */
+export type MeshSetupKey = {
+  name: string;
+  /** `reusable` for a key more than one device enrols with, `one-off` for a single peer. */
+  type: "reusable" | "one-off";
+  /** Seconds. The server caps this at a year and refuses less than a day. */
+  expirySeconds: number;
+  /** How many peers may enrol with it; 0 is unlimited. */
+  usageLimit: number;
+  /** Groups every peer enrolled with it lands in, by name. */
+  autoGroups: readonly string[];
+  /** An ephemeral peer is reaped once it has been offline for ten minutes. */
+  ephemeral: boolean;
+};
+
+/**
+ * A network the routing peer carries for everyone else — what makes a connected
+ * phone able to reach the LAN rather than only the boards on the overlay.
+ */
+export type MeshRoute = {
+  /** Groups the highly-available copies of one route; it is also the route's name. */
+  networkId: string;
+  description: string;
+  /** The range being carried, in CIDR. `0.0.0.0/0` is an exit node. */
+  network: string;
+  /** Which peers are offered the route, by group name. */
+  groups: readonly string[];
+  /** Lowest wins where two routes carry the same range. */
+  metric: number;
+  /** Whether the routing peer rewrites the source address on the way out. */
+  masquerade: boolean;
+  enabled: boolean;
+  /**
+   * Advertise the route without applying it, so a client takes it only after
+   * selecting it. This is what makes an exit node opt-in: without it every peer
+   * would route all of its traffic through the house the moment it connects.
+   */
+  skipAutoApply?: boolean;
+};
+
+/**
+ * DNS for the peers: a domain sent to a nameserver on the overlay rather than
+ * to whatever the peer's own network handed it.
+ *
+ * The address is not declared. It is the routing peer's *mesh* address, which
+ * the coordinator assigns, so it is resolved from the peer at deploy time — a
+ * peer deleted and re-enrolled gets a new one, and a pinned literal would send
+ * every peer's queries into a hole.
+ */
+export type MeshNameservers = {
+  name: string;
+  description: string;
+  /** The port the nameserver answers on. */
+  port: number;
+  /** Which peers use it, by group name. */
+  groups: readonly string[];
+  /** The domains sent to it. Empty only for a group that resolves everything. */
+  domains: readonly string[];
+  /** Whether it resolves every domain rather than the ones listed. */
+  primary: boolean;
+  searchDomainsEnabled: boolean;
+  enabled: boolean;
+};
+
+/**
+ * The board's own enrolment — what makes the machine that coordinates the
+ * overlay a peer of it, and so the thing every route below is carried by.
+ *
+ * The name it registers under is not here: it is `routingPeer`, which the routes
+ * and the DNS group already resolve against. One string, stated once, because
+ * two would be a peer enrolled under a name nothing names — a mesh that connects
+ * and routes nothing, which looks exactly like a working one.
+ */
+export type MeshAgent = {
+  /**
+   * Which of `setupKeys` the board enrols with, by name. The key's plaintext is
+   * a secret output of the resource that created it, so it reaches the board
+   * sealed and is never copied anywhere a person could read it.
+   */
+  setupKey: string;
+  /**
+   * The port WireGuard binds, or null for the client's own default.
+   *
+   * Composed from the installation, which is also where the packet filter's
+   * world-facing rule and the router's forward come from — the three have to
+   * agree or a peer quietly relays through the coordinator instead of meeting
+   * this board directly. That failure is invisible: the mesh works, and every
+   * byte of it crosses the busiest machine in the house twice.
+   */
+  wireguardPort: number | null;
+};
+
+/**
+ * The account state a deploy holds on a service it claimed: the state that
+ * lives behind that service's own API rather than in a file on the board.
+ *
+ * It is composed by the entry's `setup` because most of it is the house — the
+ * overlay's ranges, the LAN it carries, the domain its DNS answers for — and
+ * the rest is the entry's own vocabulary. Nothing here names a product: the
+ * shape is groups, keys, routes and nameservers, which is what an overlay is,
+ * and the resources it becomes are the bridged provider's in `src/infra/`.
+ */
+export type MeshState = {
+  /**
+   * The peer that carries the routes and answers DNS, by the name it enrols
+   * under. It is not derived from the host: the agent's own `--hostname` flag
+   * decides what the coordinator calls this board, so the two are one string
+   * stated once rather than two that can disagree.
+   */
+  routingPeer: string;
+  /**
+   * How that peer comes to exist, when it is this board's own agent. Absent
+   * where the routing peer is another machine, which the deploy then has no
+   * way to enrol and does not try to.
+   */
+  agent?: MeshAgent;
+  settings: MeshSettings;
+  /** Groups to create, by name. The overlay's own `All` is built in and never declared. */
+  groups: readonly string[];
+  setupKeys: readonly MeshSetupKey[];
+  routes: readonly MeshRoute[];
+  nameservers: readonly MeshNameservers[];
+};
+
 /** A role and the entry that claims it — which is what a consumer of one needs. */
 export type Claimed<R> = { spec: ServiceSpec; role: R };
 
@@ -330,6 +585,24 @@ export type ServiceSetup = {
   /** Merged into the quadlet beside the entry's own `env`; they must not overlap. */
   env?: Record<string, string>;
   files?: readonly ServiceFile[];
+  /**
+   * Files whose body carries key material this deploy generates. Separate from
+   * `files` because they are a different resource on the device — an age blob
+   * the boot-time decrypt opens — and because their body is a function of values
+   * that do not exist until the deploy has drawn them.
+   */
+  secretFiles?: readonly ServiceSecretFile[];
+  /**
+   * State the deploy holds behind the service's own API rather than on the
+   * board — for a service the deploy claimed the first account of, and only for
+   * one, since the token that authorises every call is that account's.
+   *
+   * It arrives through `setup` for the reason the files above do: almost all of
+   * it is the installation — the overlay's ranges, the LAN it carries, the
+   * domain its DNS answers for — and an entry composes those from the house it
+   * is handed rather than restating them.
+   */
+  mesh?: MeshState;
 };
 
 /**
@@ -504,6 +777,16 @@ export type ServiceSpec = {
    * container reads it from.
    */
   metricsAccount?: MetricsAccount;
+  /**
+   * The first account on this service, claimed by the deploy. Declaring it is
+   * what creates the resource that posts the setup call, and the token that call
+   * answers with is what every later call against this service authenticates as.
+   *
+   * It is the one credential in this repository that lands in Pulumi state: the
+   * server mints it and this repository makes no vault writes, so there is
+   * nowhere else to put it. See `src/infra/providers/netbirdAccount.ts`.
+   */
+  bootstrapAccount?: BootstrapAccount;
   /**
    * The half of this service's configuration that names the installation. It is
    * declared on the entry so that a service is one entry: nothing outside the
@@ -868,6 +1151,20 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
     );
   }
 
+  // A connector is a client of the identity provider, registered on the other
+  // side: the issuer it is given comes from whichever entry claims the identity
+  // role, so a deployment with none has no URL to hand it and the federation
+  // would be registered pointing at nothing.
+  const federating = catalog.services.filter(
+    (spec) => spec.bootstrapAccount?.connector !== undefined,
+  );
+  if (catalog.identity === undefined && federating.length > 0) {
+    errors.push(
+      "no deployed entry claims the identity role, and these federate their own broker to " +
+        `it: ${named(federating)} — there is no issuer to register the connector against`,
+    );
+  }
+
   const readers = catalog.services.filter((spec) => spec.certificates !== undefined);
   if (readers.length > 0 && catalog.proxy?.role.certificateStore === undefined) {
     errors.push(
@@ -888,9 +1185,43 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
   return { errors, warnings };
 }
 
+/**
+ * The one directory a sealed blob is opened in. `keel-secrets.service` decrypts
+ * `*.age` here and nowhere else, so this is what makes a path a secret's rather
+ * than a convention anybody has to remember.
+ */
+export const SECRETS_DIR = "/etc/secrets";
+
 /** Where a service's decrypted env file lands, or null when it has no secrets. */
 export function secretsPath(spec: ServiceSpec): string | null {
-  return spec.secretEnv === undefined ? null : `/etc/secrets/${spec.name}.env`;
+  return spec.secretEnv === undefined ? null : `${SECRETS_DIR}/${spec.name}.env`;
+}
+
+/**
+ * Whether a generated file's path is one the boot-time decrypt will open — a
+ * plain file directly under `SECRETS_DIR`.
+ *
+ * A blob written anywhere else is written correctly, never decrypted, and
+ * discovered as a container that will not start with its configuration missing.
+ * So the deploy refuses the path rather than the device reporting the symptom.
+ */
+export function isSecretsPath(path: string): boolean {
+  const rest = path.startsWith(`${SECRETS_DIR}/`) ? path.slice(SECRETS_DIR.length + 1) : "";
+  return rest.length > 0 && !rest.includes("/");
+}
+
+/**
+ * A generated file's body with every value it will be handed stood in for.
+ *
+ * What `yarn spec` prints and what the golden pins: the shape of the file is
+ * reviewable — every line of it except the key material — while the values
+ * themselves do not exist until a deploy draws them, and never appear in a
+ * snapshot, a terminal or this repository.
+ */
+export function secretFileShape(file: ServiceSecretFile, placeholder = "<generated>"): string {
+  return file.content(
+    Object.fromEntries(Object.keys(file.generate).map((name) => [name, placeholder])),
+  );
 }
 
 /**
@@ -903,19 +1234,20 @@ export function secretsPath(spec: ServiceSpec): string | null {
  * second blob costs nothing on the device.
  */
 export function metricsSecretsPath(spec: ServiceSpec): string | null {
-  return spec.metricsAccount === undefined ? null : `/etc/secrets/${spec.name}.metrics.env`;
+  return spec.metricsAccount === undefined ? null : `${SECRETS_DIR}/${spec.name}.metrics.env`;
 }
 
 /**
- * The address the account is created under: the service's own name in the
- * fleet's zone.
+ * The address an account the deploy creates is made under: the service's own
+ * name in the fleet's zone.
  *
  * Derived rather than declared, because it identifies a machine account and
  * nobody reads mail at it — and a name typed into a catalog twice is a name that
- * can disagree with itself, which on the hub is a second account rather than an
- * error.
+ * can disagree with itself, which on the far side is a second account rather
+ * than an error. Read by both the account a service is given on the metrics hub
+ * and the first account the deploy claims on a service that boots without one.
  */
-export function metricsAccountEmail(spec: ServiceSpec, domain: string): string {
+export function deployedAccountEmail(spec: ServiceSpec, domain: string): string {
   return `${spec.name}@${domain}`;
 }
 

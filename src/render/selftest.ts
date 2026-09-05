@@ -11,6 +11,13 @@ export type Validation = {
   label: string;
   /** Shell command; a non-zero exit means the configuration is bad. */
   command: string;
+  /**
+   * Skip where the kernel is the host's, not this image's. A check that reads a
+   * sysctl or a device is asking about the machine, and under `podman` the
+   * answer belongs to whatever booted the laptop — so running it there tests
+   * nothing and reports a failure the image cannot cause.
+   */
+  hostOnly?: boolean;
 };
 
 export const SELFTEST_PATH = "/usr/lib/keel/selftest";
@@ -44,9 +51,15 @@ function selftest(
   // indented template gives its first line a different indent from the rest.
   const checkBlock = (items: readonly Validation[], indent: string): string =>
     items
-      .map(({ label, command }) =>
+      .map(({ label, command, hostOnly }) =>
         [
-          `${indent}if ${command} >/dev/null 2>&1; then`,
+          ...(hostOnly === true
+            ? [
+                `${indent}if systemd-detect-virt --container --quiet; then`,
+                `${indent}    ok "${label} (skipped: container)"`,
+                `${indent}elif ${command} >/dev/null 2>&1; then`,
+              ]
+            : [`${indent}if ${command} >/dev/null 2>&1; then`]),
           `${indent}    ok "${label}"`,
           `${indent}else`,
           `${indent}    fail "${label} rejected by: ${command}"`,

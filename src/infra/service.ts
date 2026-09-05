@@ -21,22 +21,26 @@
 import { createHash } from "node:crypto";
 
 import * as pulumi from "@pulumi/pulumi";
+import * as random from "@pulumi/random";
 
 import { INSTALLATION } from "../config/installation";
 import { selectProfile } from "../config/profiles";
 import {
   backupPath,
   type Catalog,
-  metricsAccountEmail,
+  deployedAccountEmail,
+  isSecretsPath,
   metricsSecretsPath,
+  SECRETS_DIR,
   secretsPath,
   type ServiceSpec,
 } from "../config/spec";
-import { type ServiceFile } from "../config/types";
+import { type ServiceFile, type ServiceSecretFile } from "../config/types";
 import { memoryDropInPath, serviceDropIn } from "../render/memory";
 import { quadletPath, renderQuadlet } from "../render/quadlet";
 import { MetricsAccount } from "./providers/metricsAccount";
 import { RemoteFile } from "./providers/remoteFile";
+import { SealedText } from "./providers/sealedText";
 import { SecretFile } from "./providers/secretFile";
 import { SystemdUnit } from "./providers/systemdUnit";
 
@@ -72,6 +76,13 @@ export type ServiceArgs = {
   extraEnv?: Record<string, string>;
   /** The files that same `setup` returned. */
   files?: readonly ServiceFile[];
+  /**
+   * The ones whose body carries key material this deploy draws. Each becomes a
+   * generated value per name it asks for, one sealed blob, and one file — and
+   * the plaintext exists only inside the apply that builds it and the resource
+   * input that carries it, encrypted, into state.
+   */
+  secretFiles?: readonly ServiceSecretFile[];
   /**
    * The roles resolved across what this host deploys. What this service needs
    * from them is the proxy that routes to it — which writes the route file, in
@@ -113,6 +124,7 @@ export default class Service extends pulumi.ComponentResource {
       sealedEnv,
       extraEnv,
       files = [],
+      secretFiles = [],
       catalog,
       needs = [],
       ageRecipient,
@@ -156,6 +168,65 @@ export default class Service extends pulumi.ComponentResource {
           )
         : undefined;
 
+    // A file whose body is key material rather than configuration: one value
+    // drawn per name the entry asks for, the body composed from them, sealed for
+    // this board and written as a blob `keel-secrets.service` opens. The
+    // plaintext exists in the apply that composes it and as an input the engine
+    // encrypts with the stack's own key — never as a value a provider captures,
+    // which is what would put it in state in the clear.
+    const generated = secretFiles.map((entry) => {
+      if (!isSecretsPath(entry.path)) {
+        throw new Error(
+          `${spec.name}'s ${entry.name} file lands at ${entry.path}, which nothing decrypts — ` +
+            `a generated file belongs directly under ${SECRETS_DIR}`,
+        );
+      }
+      if (ageRecipient === undefined) {
+        throw new Error(
+          `${spec.name} carries a generated file but ${host} has no ageRecipient — ` +
+            "generate an identity on the host and record its public half",
+        );
+      }
+      const values = Object.fromEntries(
+        Object.entries(entry.generate).map(([name, shape]) => {
+          // `protect` is the entry saying what a replacement would cost: a value
+          // that is the only key to data already written is one Pulumi must
+          // refuse to redraw, because a fresh one leaves that data unreadable.
+          const bytes = new random.RandomBytes(
+            `${spec.name}-${name}`,
+            { length: shape.bytes },
+            { ...parent, protect: shape.protect === true },
+          );
+          return [name, shape.encoding === "hex" ? bytes.hex : bytes.base64];
+        }),
+      );
+      const sealed = new SealedText(
+        `${spec.name}-${entry.name}`,
+        {
+          // Stated rather than inherited: every drawn value is already a secret
+          // output, so the body is one — and a file that draws nothing is still
+          // a file whose body has no business being read out of a plan.
+          plaintext: pulumi.secret(pulumi.all(values).apply((drawn) => entry.content(drawn))),
+          ageRecipient,
+        },
+        parent,
+      );
+      return {
+        plaintextHash: sealed.plaintextHash,
+        file: new SecretFile(
+          `${spec.name}-${entry.name}-file`,
+          {
+            host,
+            sshArgs,
+            path: `${entry.path}.age`,
+            ciphertext: sealed.ciphertext,
+            plaintextHash: sealed.plaintextHash,
+          },
+          parent,
+        ),
+      };
+    });
+
     // An account on another service, generated rather than read: the entry says
     // it needs one and which two variables it reads the login out of, the hub is
     // whichever entry claims the metrics role, and the password is created and
@@ -184,7 +255,7 @@ export default class Service extends pulumi.ComponentResource {
               // configuration dials it on, and the only one that needs no
               // opinion about whether a laptop can route to the LAN.
               hubUrl: `http://127.0.0.1:${catalog.metrics.spec.port}`,
-              email: metricsAccountEmail(spec, INSTALLATION.network.domain),
+              email: deployedAccountEmail(spec, INSTALLATION.network.domain),
               role: spec.metricsAccount.role,
               api: catalog.metrics.role.api,
               superuser: catalog.metrics.role.superuser,
@@ -268,7 +339,17 @@ export default class Service extends pulumi.ComponentResource {
       ...(routeFile ? [routeFile] : []),
       ...(secretFile ? [secretFile] : []),
       ...(metricsFile ? [metricsFile] : []),
+      ...generated.map((entry) => entry.file),
     ];
+    // Empty for a service with no generated file, which is every service but
+    // one — and an empty string is what keeps that service's trigger the value
+    // it already had.
+    const generatedHash: pulumi.Input<string> =
+      generated.length === 0
+        ? ""
+        : pulumi
+            .all(generated.map((entry) => entry.plaintextHash))
+            .apply((hashes) => hashes.join(""));
     this.unit = new SystemdUnit(
       spec.name,
       {
@@ -277,15 +358,24 @@ export default class Service extends pulumi.ComponentResource {
         unit: `${spec.name}.service`,
         quadlet: true,
         trigger: pulumi
-          .all([quadlet, sealedEnv?.plaintextHash ?? "", account?.plaintextHash ?? ""])
-          .apply(([body, secretHash, accountHash]) =>
+          .all([
+            quadlet,
+            sealedEnv?.plaintextHash ?? "",
+            account?.plaintextHash ?? "",
+            generatedHash,
+          ])
+          .apply(([body, secretHash, accountHash, fileHash]) =>
             // Each part hashed before it is joined: fixed-length pieces cannot
             // run together, so a boundary shifting between two of them is a
-            // change. The generated credential joins the secret's own part
-            // rather than becoming another one — a new part would change every
-            // trigger in the fleet, restarting the resolver, the proxy and the
-            // identity provider for a field none of them has.
-            sha256([body, memory, ...restarting, secretHash + accountHash].map(sha256).join("")),
+            // change. Every credential joins the secret's own part rather than
+            // becoming another one — a new part would change every trigger in
+            // the fleet, restarting the resolver, the proxy and the identity
+            // provider for a value none of them has.
+            sha256(
+              [body, memory, ...restarting, secretHash + accountHash + fileHash]
+                .map(sha256)
+                .join(""),
+            ),
           ),
       },
       { ...parent, dependsOn: deps },

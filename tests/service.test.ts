@@ -18,14 +18,18 @@ import { EXAMPLE_SERVICES, SERVICES } from "../src/config/services";
 import {
   catalogOf,
   type Ingress,
+  isSecretsPath,
   metricsSecretsPath,
   publicRecords,
   type RemoteSpec,
   runSetup,
   secretFields,
+  secretFileShape,
   secretsPath,
   subdomainOf,
 } from "../src/config/spec";
+import { type ServiceSecretFile } from "../src/config/types";
+import { publicProxyIngress } from "../src/render/nftPorts";
 import {
   NETWORK_INTERFACES,
   NETWORK_NAMES,
@@ -203,8 +207,21 @@ describe("traefik routes", () => {
       expect(middlewares.includes(`oauth2-chain-${spec.name}`), router).toBe(spec.auth === "edge");
       expect(middlewares, router).not.toContain("sso-auth");
     }
-    // A named public host is the one thing that drops the allowlist.
-    expect(route(spec, [subdomainOf(spec)!])).not.toContain("internal-only");
+    // A named public host is the one thing that drops the allowlist, and it
+    // drops it from every router but one that narrows itself back to the LAN —
+    // the only direction a router may differ from the vhost it answers on. A
+    // path with no business being answered from the internet is what that is
+    // for; nothing declared on a router can widen who reaches the name.
+    const narrowed = new Set(
+      (spec.routers ?? [])
+        .filter((router) => router.reach === "internal")
+        .map((router) => (router.name === "" ? spec.name : `${spec.name}-${router.name}`)),
+    );
+    for (const [router, { middlewares }] of Object.entries(
+      routersOf(route(spec, [subdomainOf(spec)!]) ?? ""),
+    )) {
+      expect(middlewares.includes("internal-only"), router).toBe(narrowed.has(router));
+    }
   });
 });
 
@@ -376,6 +393,24 @@ describe("one entry is the whole declaration", () => {
       expect(new Set(files.map((file) => file.name)).size).toBe(files.length);
     }
   });
+
+  it("lands a file it generates key material for where the decrypt opens it, and names it", () => {
+    // A blob written anywhere but `/etc/secrets` is written correctly and never
+    // decrypted — the container then starts with its configuration missing while
+    // the deploy reports success. And a generated file the container never names
+    // is either dead weight or, worse, a mount whose source no file lands at,
+    // which podman answers by creating a directory over it.
+    for (const spec of SERVICES) {
+      const setup = runSetup(spec, INSTALLATION, CATALOG);
+      const files = setup?.secretFiles ?? [];
+      const quadlet = renderQuadlet(spec, setup?.env, CATALOG);
+      for (const file of files) {
+        expect(isSecretsPath(file.path), file.path).toBe(true);
+        expect(quadlet, `${spec.name}: ${file.path}`).toContain(file.path);
+      }
+      expect(new Set(files.map((file) => file.name)).size).toBe(files.length);
+    }
+  });
 });
 
 describe("the env files a container reads", () => {
@@ -410,6 +445,22 @@ describe("the env files a container reads", () => {
     expect(only).not.toContain("EnvironmentFile=/etc/secrets/only.env\n");
     expect(only).toContain("EnvironmentFile=/etc/secrets/only.metrics.env");
     expect(only).toContain("keel-secrets.service");
+  });
+
+  it("waits for the decrypt for a secret it mounts rather than reads as environment", () => {
+    // A configuration file whose body is key material is a `Volume=` line and no
+    // `EnvironmentFile=` at all. Without this the container can start before the
+    // blob beside it is opened, and podman answers a bind mount whose source is
+    // missing by creating a directory over it — which the next decrypt cannot
+    // replace, so the service never reads its own configuration again.
+    const mounted = renderQuadlet({
+      ...template,
+      name: "mounted",
+      secretEnv: undefined,
+      mounts: ["/etc/secrets/mounted.config.yaml:/etc/app/config.yaml:ro"],
+    });
+    expect(mounted).not.toContain("EnvironmentFile=");
+    expect(mounted).toContain("keel-secrets.service");
   });
 
   it("names one for an entry that declares no account, and none for an entry with neither", () => {
@@ -454,5 +505,60 @@ describe("the environment systemd is handed", () => {
     const quadlet = renderQuadlet(spec);
     expect(quadlet).toContain(String.raw`Environment=ROOMS="{\"a\":[\"x y\",\"q\\\"z\"]}"`);
     expect(quadlet).toMatch(/^Environment=PLAIN=7$/m);
+  });
+});
+
+describe("a file whose body is key material", () => {
+  const config: ServiceSecretFile = {
+    name: "config",
+    path: "/etc/secrets/app.config.yaml",
+    generate: {
+      signing: { bytes: 32, encoding: "hex" },
+      store: { bytes: 32, encoding: "base64", protect: true },
+    },
+    content: (generated) => `signing: ${generated.signing}\nstore: ${generated.store}\n`,
+  };
+
+  it("reads back as its shape, with every drawn value stood in for", () => {
+    // The whole file except the key material, which is what a review reads and
+    // what the golden pins — the values themselves exist only on the board, and
+    // a snapshot that held one would be this repository holding a secret.
+    expect(secretFileShape(config)).toBe("signing: <generated>\nstore: <generated>\n");
+  });
+
+  it("lands only where the boot-time decrypt looks", () => {
+    // `keel-secrets.service` opens `*.age` directly under /etc/secrets. A blob
+    // anywhere else is written correctly and never decrypted, so the service
+    // starts with its configuration missing while the deploy reports success.
+    expect(isSecretsPath(config.path)).toBe(true);
+    expect(isSecretsPath("/etc/app/config.yaml")).toBe(false);
+    expect(isSecretsPath("/etc/secrets/nested/config.yaml")).toBe(false);
+    expect(isSecretsPath("/etc/secrets/")).toBe(false);
+  });
+});
+
+describe("the proxy's port and the public vhost", () => {
+  // A name in `publicHosts` is answerable from anywhere or it is nothing: the
+  // route stops guarding it by source address, so a filter that still dropped
+  // :443 from the internet would leave the opt-out true one layer and false the
+  // next. Derived and not declared, because the proxy's entry is committed and
+  // an `ingress` line there would open a clone's 443 to the world as well.
+  const proxy = EXAMPLE_SERVICES.find((spec) => spec.proxy !== undefined)!;
+  const gated = EXAMPLE_SERVICES.find((spec) => subdomainOf(spec) !== null)!;
+
+  it("leaves the proxy alone when no deployed vhost has opted out", () => {
+    expect(publicProxyIngress(catalogOf(EXAMPLE_SERVICES), [])).toBeNull();
+  });
+
+  it("opens the proxy's own port to the world when one has", () => {
+    const derived = publicProxyIngress(catalogOf(EXAMPLE_SERVICES), [subdomainOf(gated)!]);
+    expect(derived?.name).toBe(proxy.name);
+    expect(derived?.ingress?.worldTcp).toContain(proxy.port);
+    // Everything the entry declared is still there.
+    expect(derived?.ingress?.lanTcp).toEqual(proxy.ingress?.lanTcp);
+  });
+
+  it("names a subdomain nothing deploys as no reason to open anything", () => {
+    expect(publicProxyIngress(catalogOf(EXAMPLE_SERVICES), ["nothing-deploys-this"])).toBeNull();
   });
 });

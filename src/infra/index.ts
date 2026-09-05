@@ -4,8 +4,8 @@
  *
  * Pulumi owns what changes often and has something to read back: the services,
  * their routes, their caps, the ports the packet filter admits to them, the
- * public DNS records, and (as they land) Kanidm clients, NetBird account state
- * and each host's booted image digest. The image owns the machine.
+ * public DNS records, the mesh's own account state, and (as they land) Kanidm
+ * clients and each host's booted image digest. The image owns the machine.
  *
  * **Nothing here shells out.** Pulumi previews by evaluating this file, so a
  * registry lookup or a vault read at module scope would fire on every
@@ -29,6 +29,7 @@ import {
   alertUrl,
   catalogOf,
   dependencyNames,
+  deployedAccountEmail,
   deploymentGaps,
   orderServices,
   publicRecords,
@@ -36,18 +37,22 @@ import {
   runSetup,
   secretFields,
   secretsPath,
+  serviceOrigin,
 } from "../config/spec";
 import { ALERT_CONFIG_PATH, renderAlertConfig } from "../render/alert";
 import { BACKUP_SECRETS_PATH, backupSet, renderBackupConfig } from "../render/backup";
 import { HOSTS_CONFIG_PATH, KEEL_HOSTS_SERVICE, renderHostsConfig } from "../render/hosts";
+import { MESH_INTERFACE } from "../render/mesh";
 import { isIpAddress, mountedShares } from "../render/mount";
 import { NFT_FORWARD_PATH, renderNftForward } from "../render/nftForward";
-import { NFT_SERVICES_PATH, renderNftServices } from "../render/nftPorts";
+import { NFT_SERVICES_PATH, publicProxyIngress, renderNftServices } from "../render/nftPorts";
 import { NETWORK_NAMES, networkQuadlet } from "../render/quadlet";
 import CertSync from "./certSync";
 import KeelBackup from "./keelBackup";
 import CifsMount from "./mount";
+import declareMesh from "./netbird";
 import { ImageDigest } from "./providers/imageDigest";
+import { BootstrapAccount, BootstrapConnector } from "./providers/netbirdAccount";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedEnv } from "./providers/sealedEnv";
 import { SystemdUnit } from "./providers/systemdUnit";
@@ -274,20 +279,29 @@ const networks = mine.some((spec) => (spec.egress ?? "internal") !== "host")
   : [];
 
 /**
- * Egress for the open bridge, as a packet-filter drop-in. It carries the accept
- * only where something is actually on that bridge: a host running nothing with
- * `egress: "open"` has no traffic for the rule to accept.
+ * What this board forwards for, as a packet-filter drop-in.
  *
- * The image carries the same rule, so this is what closes the gap on a board
+ * Two rules and two questions, both answered from the deployed set. The open
+ * bridge's accept is carried only where something is actually on that bridge;
+ * the image carries the same rule, so this is what closes the gap on a board
  * booted from one that predates it — a `pulumi up` rather than a rebuild and a
- * reboot of the host that answers LAN DNS. Its content joins the shared reload's
- * trigger below, the way the port file does.
+ * reboot of the host that answers LAN DNS. The mesh interface's accept is
+ * carried only where this board enrols as the overlay's routing peer, and it is
+ * in no image at all: the forward chain is policy drop, so without this line the
+ * agent connects, the routes exist, the dashboard is green and every packet a
+ * connected device aims at the LAN is dropped by this host.
  *
  * Written whether or not it has a rule in it, for the reason the port file below
- * is one file: withdrawing the accept has to be an *update*, because a deletion
+ * is one file: withdrawing an accept has to be an *update*, because a deletion
  * runs after the reload and the reload would re-read the copy still on disk.
  */
-const forwardRules = renderNftForward(mine.some((spec) => (spec.egress ?? "internal") === "open"));
+const routesTheMesh = mine.some(
+  (spec) => runSetup(spec, INSTALLATION, catalog)?.mesh?.agent !== undefined,
+);
+const forwardRules = renderNftForward(
+  mine.some((spec) => (spec.egress ?? "internal") === "open"),
+  routesTheMesh ? MESH_INTERFACE : undefined,
+);
 const forwardFile = new RemoteFile("nft-forward-open", {
   host: sshTarget,
   sshArgs,
@@ -320,14 +334,22 @@ for (const spec of ordered) {
   // walked in is the order they imply.
   const needs = dependencyNames(spec, catalog).map((name) => services.get(name)!);
 
+  // The installation-shaped half of this service's configuration, composed by
+  // the entry itself from the house and the roles beside it. Nothing here decides
+  // what a particular service needs. Pure, so reading it costs nothing and it is
+  // read before the secrets, one of which it can ask for.
+  const setup = runSetup(spec, INSTALLATION, catalog);
+
   // Read, seal, write — all three inside the resource. What reaches the state
   // file is ciphertext and a hash; the identity that opens it lives only on the
   // host, and the plaintext exists only inside the provider's own call.
   const needsSecrets = secretsPath(spec) !== null && spec.secretEnv !== undefined;
   // A generated credential is sealed for the board in the resource that makes
-  // it, so an entry with an account on another service needs the identity for
-  // exactly the reason a vault-read secret does.
-  if ((needsSecrets || spec.metricsAccount !== undefined) && ageRecipient === undefined) {
+  // it, so an entry with an account on another service — or a file this deploy
+  // draws the key material for — needs the identity for exactly the reason a
+  // vault-read secret does.
+  const generates = spec.metricsAccount !== undefined || (setup?.secretFiles?.length ?? 0) > 0;
+  if ((needsSecrets || generates) && ageRecipient === undefined) {
     throw new Error(
       `${spec.name} needs secrets but ${sshTarget} has no ageRecipient — ` +
         "generate an identity on the host and record its public half",
@@ -357,11 +379,6 @@ for (const spec of ordered) {
         )
       : undefined;
 
-  // The installation-shaped half of this service's configuration, composed by
-  // the entry itself from the house and the roles beside it. Nothing here decides
-  // what a particular service needs.
-  const setup = runSetup(spec, INSTALLATION, catalog);
-
   /**
    * The units that fill a certificate directory an entry declared, created with
    * that service and removed with it — the declaration decides, not a name
@@ -389,6 +406,7 @@ for (const spec of ordered) {
       sealedEnv: sealed && { ciphertext: sealed.ciphertext, plaintextHash: sealed.plaintextHash },
       extraEnv: setup?.env,
       files: setup?.files,
+      secretFiles: setup?.secretFiles,
       catalog,
       // The same edges, as the resources themselves: a credential this service's
       // own resources generate is created by calling a service that is up.
@@ -413,6 +431,100 @@ for (const spec of ordered) {
     },
   );
   services.set(spec.name, service);
+}
+
+/**
+ * The first account on a service that boots unclaimed, and the identity provider
+ * its own broker federates to.
+ *
+ * Here rather than inside `Service` for the same reason a public DNS record is:
+ * what it produces is a credential the *deploy* holds — the token the declarative
+ * providers for that service's own state will authenticate with — and not a file
+ * on the board. Nothing in the container's own resources reads it.
+ *
+ * Ordered after the service's unit, because an account is claimed by calling
+ * something that answers, and the connector after the account because the call
+ * that registers it carries the token the account resource returned. The issuer
+ * comes from whichever entry claims the identity role, asked for the client the
+ * connector is registered as — so neither end spells a URL and the two cannot
+ * drift into naming different clients. A `connector` with no identity role
+ * deployed is one of the gaps refused before any of this is built.
+ */
+for (const spec of mine) {
+  const bootstrap = spec.bootstrapAccount;
+  // The declarative half of the same service: state behind its own API, which
+  // every call authenticates for with the token the account below returns. So an
+  // entry that declares one without the other has nothing to authenticate as,
+  // and that is a plan refused here rather than a provider configured with an
+  // empty credential and a run that fails resource by resource.
+  const mesh = runSetup(spec, INSTALLATION, catalog)?.mesh;
+  if (bootstrap === undefined) {
+    if (mesh !== undefined) {
+      throw new Error(
+        `${spec.name} declares the state a deploy holds on its own API and no account for the ` +
+          "deploy to claim — there is no token to authenticate those calls with",
+      );
+    }
+    continue;
+  }
+  const account = new BootstrapAccount(
+    `${spec.name}-account`,
+    {
+      host: sshTarget,
+      sshArgs,
+      // Loopback, because the service is talked to from the board rather than
+      // from here — the same address its own configuration is written with.
+      apiUrl: `http://127.0.0.1:${spec.port}`,
+      api: bootstrap.api,
+      // The account's address is derived, the same as the hub account's: it
+      // identifies a machine account nobody reads mail at, and it is also the
+      // local login a person signs in with when the token has to be replaced.
+      email: deployedAccountEmail(spec, INSTALLATION.network.domain),
+      name: bootstrap.name,
+      tokenDays: bootstrap.tokenDays,
+      vault,
+      token: bootstrap.token,
+    },
+    { dependsOn: [services.get(spec.name)!] },
+  );
+  if (bootstrap.connector !== undefined) {
+    new BootstrapConnector(
+      `${spec.name}-connector`,
+      {
+        host: sshTarget,
+        sshArgs,
+        apiUrl: `http://127.0.0.1:${spec.port}`,
+        api: bootstrap.api,
+        accessToken: account.accessToken,
+        name: bootstrap.connector.name,
+        clientId: bootstrap.connector.clientId,
+        issuer: catalog.identity!.role.issuer(
+          serviceOrigin(catalog.identity!.spec, INSTALLATION.network.domain),
+          bootstrap.connector.clientId,
+        ),
+        vault,
+        secret: bootstrap.connector.secret,
+      },
+      { dependsOn: [account] },
+    );
+  }
+  if (mesh !== undefined) {
+    // The public vhost, not the loopback the two resources above use: the
+    // bridged provider is a plugin process running where this program runs, so
+    // it dials the coordinator the way anything off the board does. That is the
+    // one thing in this stack that needs a route to that name from the deploy
+    // machine — see `netbird.ts` for the trade.
+    declareMesh({
+      name: spec.name,
+      origin: serviceOrigin(spec, INSTALLATION.network.domain),
+      token: account.accessToken,
+      state: mesh,
+      // The one half of that file which is not an API call: the routing peer is
+      // this board's own agent, enrolled over ssh with a key sealed for its age
+      // identity, the way every other device resource reaches a machine.
+      board: { host: sshTarget, sshArgs, ageRecipient },
+    });
+  }
 }
 
 /**
@@ -496,7 +608,15 @@ if (publicNames.length > 0) {
  * deletion, and the reload it was meant to precede would re-read the file still
  * on disk and re-admit every port in it.
  */
-const portRules = renderNftServices(mine);
+// The proxy answers the internet only where a vhost has opted out of the
+// allowlist; `publicProxyIngress` derives that rather than the committed entry
+// declaring it, so a clone with no public name keeps :443 on the LAN.
+const publicProxy = publicProxyIngress(catalog, INSTALLATION.publicHosts);
+const portRules = renderNftServices(
+  publicProxy === null
+    ? mine
+    : mine.map((spec) => (spec.name === publicProxy.name ? publicProxy : spec)),
+);
 const portsFile = new RemoteFile("nft-services", {
   host: sshTarget,
   sshArgs,

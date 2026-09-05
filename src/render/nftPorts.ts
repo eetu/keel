@@ -1,4 +1,4 @@
-import { type Ingress, type ServiceSpec } from "../config/spec";
+import { type Catalog, type Ingress, type ServiceSpec, subdomainOf } from "../config/spec";
 
 /**
  * The ports a host's services need, as one drop-in for the packet filter.
@@ -94,6 +94,38 @@ export function renderNftPorts(spec: ServiceSpec): string | null {
  * file and inside the state value hashed from it. A renderer's output depends on
  * its argument and nothing else.
  */
+/**
+ * The proxy's port, opened to the internet, when a deployed vhost has opted out
+ * of the allowlist — and only then.
+ *
+ * A name in `publicHosts` is answerable from anywhere or it is nothing: Traefik
+ * matches on the Host header, so the route already stops guarding that vhost by
+ * source address, and a packet filter that still dropped :443 from the internet
+ * would leave the opt-out true in the proxy and false one layer down. The
+ * coordinator of a mesh is the case this exists for.
+ *
+ * Derived rather than declared, because the proxy's entry is committed: an
+ * `ingress` line there would open 443 to the world for every clone, including
+ * the ones whose `publicHosts` is empty and whose 443 should answer the LAN
+ * alone.
+ */
+export function publicProxyIngress(
+  catalog: Catalog,
+  publicHosts: readonly string[],
+): ServiceSpec | null {
+  const proxy = catalog.proxy?.spec;
+  if (proxy === undefined) return null;
+  const exposed = catalog.services.some((spec) => {
+    const subdomain = subdomainOf(spec);
+    return subdomain !== null && publicHosts.includes(subdomain);
+  });
+  if (!exposed) return null;
+  return {
+    ...proxy,
+    ingress: { ...proxy.ingress, worldTcp: [...(proxy.ingress?.worldTcp ?? []), proxy.port] },
+  };
+}
+
 export function renderNftServices(specs: readonly ServiceSpec[]): string {
   const blocks = [...specs]
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))

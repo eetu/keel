@@ -12,7 +12,13 @@
 import { describe, expect, it } from "vitest";
 
 import { PROFILES } from "../src/config/profiles";
-import { type Catalog, runSetup, type ServiceSpec, subdomainOf } from "../src/config/spec";
+import {
+  type Catalog,
+  runSetup,
+  secretFileShape,
+  type ServiceSpec,
+  subdomainOf,
+} from "../src/config/spec";
 import { type Installation, type ServiceFile } from "../src/config/types";
 import { serviceDropIn } from "../src/render/memory";
 import { quadletPath, renderQuadlet } from "../src/render/quadlet";
@@ -39,14 +45,18 @@ export function pinBodies(
   describe.each(entries)("$name", (spec: ServiceSpec) => {
     const setup = runSetup(spec, house, catalog);
     const files = setup?.files ?? [];
+    const secretFiles = setup?.secretFiles ?? [];
 
     it("writes the same set of files", () => {
       // A path is as load-bearing as a body: a moved file is a resource replaced,
       // and one whose `restarts` flag flipped is a restart that stops happening.
+      // A generated file lands as the blob beside the name it decrypts to, which
+      // is the path a quadlet's `Volume=` line has to name.
       const written = [
         `quadlet ${quadletPath(spec)}`,
         ...(subdomainOf(spec) === null ? [] : [`route ${proxy.routePath(spec)}`]),
         ...files.map(fileLine),
+        ...secretFiles.map((file) => `secret ${file.name} ${file.path}.age mode=600`),
       ];
       expect(written.join("\n")).toMatchSnapshot();
     });
@@ -79,6 +89,15 @@ export function pinBodies(
     for (const file of files) {
       it(`renders the same ${file.name} file`, () => {
         expect(file.content).toMatchSnapshot();
+      });
+    }
+
+    for (const file of secretFiles) {
+      it(`renders the same ${file.name} shape`, () => {
+        // Every value the deploy draws stood in for, so the golden pins the
+        // file's whole shape and holds no key material: the body is what a
+        // review reads, and the values exist only on the board.
+        expect(secretFileShape(file)).toMatchSnapshot();
       });
     }
   });

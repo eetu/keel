@@ -11,6 +11,8 @@
  * The last describe holds the same shape over a vhost that carries several
  * routers, because who may reach a name is the vhost's property and never a
  * router's — a second router must not be a way past the gate or the allowlist.
+ * A router may narrow what its vhost admits and never widen it, which is the one
+ * asymmetry in that rule and the last test in the file.
  */
 
 import { describe, expect, it } from "vitest";
@@ -178,6 +180,37 @@ describe("a vhost that carries several routers", () => {
     })!;
     for (const [name, router] of Object.entries(routersOf(published))) {
       expect(router.middlewares, name).toEqual(["oauth2-chain-split"]);
+    }
+  });
+
+  it("keeps the allowlist on a narrowed router where the vhost dropped it", () => {
+    // The one direction a router may differ from its vhost. A public name is
+    // answerable from anywhere by definition, and some path under it has no
+    // business being — the unauthenticated call that claims a coordinator's
+    // first account. `reach: "internal"` puts the allowlist back on that router
+    // and on no other, so the siblings stay published and the narrowed one is
+    // reachable from the LAN and the mesh alone.
+    const narrowed: ServiceSpec = {
+      ...split,
+      auth: "open",
+      routers: [
+        { name: "setup", match: "PathPrefix(`/api/setup`)", priority: 200, reach: "internal" },
+        ...split.routers!,
+      ],
+    };
+    const published = routersOf(
+      renderTraefikRoute(narrowed, { domain: DOMAIN, publicHosts: ["split"], gate: GATE })!,
+    );
+    expect(published["split-setup"].middlewares).toEqual(["internal-only"]);
+    for (const name of ["split-grpc", "split-api", "split"]) {
+      expect(published[name].middlewares, name).toEqual([]);
+    }
+    // And nothing declared on a router widens the vhost: on a name that never
+    // opted out, every router carries the allowlist and the narrowed one is no
+    // different from its siblings.
+    const internal = routersOf(renderTraefikRoute(narrowed, { domain: DOMAIN, gate: GATE })!);
+    for (const [name, router] of Object.entries(internal)) {
+      expect(router.middlewares, name).toEqual(["internal-only"]);
     }
   });
 

@@ -52,6 +52,62 @@ export type ServiceFile = {
   restarts?: boolean;
 };
 
+/**
+ * A random value the deploy draws for a service, which no person ever types: a
+ * signing secret, a store's encryption key, a session cookie key. It is
+ * generated where it is used and sealed for the board in the same run, so it is
+ * in no vault and in nobody's clipboard — the same trade the metrics account
+ * makes, for the same reason.
+ *
+ * `bytes` and `encoding` are two different facts and both belong to whoever
+ * reads the value: 32 bytes are 64 hexadecimal characters to one server and 44
+ * base64 ones to another, and a server that wants a 32-character AES key wants
+ * 16 bytes spelled as hex.
+ */
+export type GeneratedSecret = {
+  /** How many random bytes are drawn. */
+  bytes: number;
+  /** How the value is spelled where the service reads it. */
+  encoding: "hex" | "base64";
+  /**
+   * Refuse to replace or delete it. For a value that is the only key to data
+   * already written: a fresh one leaves an unreadable store rather than a
+   * credential to re-issue, so replacing it has to be a decision somebody takes
+   * by removing this line, never one a changed input takes on their behalf.
+   */
+  protect?: boolean;
+};
+
+/**
+ * A file whose body carries values the deploy generated — a server's
+ * configuration with key material in it, which makes the whole file a secret
+ * rather than a `ServiceFile`.
+ *
+ * The body is stated as a function of those values rather than as a string,
+ * because a generated value exists only once its resource has run: the entry
+ * says what the file looks like and never sees what is in it, the deploy layer
+ * draws the values, seals the result for the board and writes the blob. So an
+ * entry stays as pure as every other one, and no plaintext is ever a `Tree`
+ * entry, a renderer's output or a resource this repository writes to a device.
+ */
+export type ServiceSecretFile = {
+  /** Distinguishes the resource; the path decides where it lands. */
+  name: string;
+  /**
+   * Where the decrypted file lands. Under `/etc/secrets`, because that is where
+   * `keel-secrets.service` opens `*.age` and nowhere else — a blob outside it is
+   * one nothing ever decrypts, and a container that starts without its file.
+   */
+  path: string;
+  /** The values the body needs, under the names the body reads them by. */
+  generate: Record<string, GeneratedSecret>;
+  /**
+   * The body, given those values. Pure, and called once per deploy inside the
+   * apply that resolves them.
+   */
+  content: (generated: Record<string, string>) => string;
+};
+
 export type Network = {
   lanCidr: string;
   domain: string;

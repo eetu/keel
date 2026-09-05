@@ -1031,7 +1031,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@pulumi/pulumi@npm:^3.142.0":
+"@pulumi/netbird@file:sdks/netbird::locator=keel%40workspace%3A.":
+  version: 0.0.10
+  resolution: "@pulumi/netbird@file:sdks/netbird#sdks/netbird::hash=2e75c7&locator=keel%40workspace%3A."
+  dependencies:
+    "@pulumi/pulumi": "npm:^3.238.0"
+    "@types/node": "npm:^20"
+    typescript: "npm:^4.7.0"
+  checksum: 10/a42f459cc0c1a4a49c42765dd59d92108dff877ece130447dc08a8f4ff978611024a6951458dee7c74027e4e6dd99dc9e66d999fca50627602921a4df8fda207
+  languageName: node
+  linkType: hard
+
+"@pulumi/pulumi@npm:^3.142.0, @pulumi/pulumi@npm:^3.238.0":
   version: 3.261.0
   resolution: "@pulumi/pulumi@npm:3.261.0"
   dependencies:
@@ -1110,6 +1121,15 @@ __metadata:
     typescript:
       optional: true
   checksum: 10/60268713278919035245baceef5f87a1b41b56298f2a712df8c70f5d81709921c9837e4544ba6f639453d30c4082af8f148c0bd45953d8a37435e4b15ae42c68
+  languageName: node
+  linkType: hard
+
+"@pulumi/random@npm:^4.21.1":
+  version: 4.21.1
+  resolution: "@pulumi/random@npm:4.21.1"
+  dependencies:
+    "@pulumi/pulumi": "npm:^3.142.0"
+  checksum: 10/1fa819105c4b53fa1b91de6612b38d81421e39e01211d32ff2ec096fe2e37e5975038b216110431d016038995e6ea8e0c2c5d62ef4d0e5a88f9bdbfffdd6b7c7
   languageName: node
   linkType: hard
 
@@ -1358,6 +1378,15 @@ __metadata:
   dependencies:
     undici-types: "npm:~8.3.0"
   checksum: 10/77a9587a3c8ce2e4bf1547d70706f262ba6dca2a39012091df36f1729132c06485833fe6f74ffbd5271d12966d6b729f6343d5af95681b7a08d437115b125015
+  languageName: node
+  linkType: hard
+
+"@types/node@npm:^20":
+  version: 20.19.43
+  resolution: "@types/node@npm:20.19.43"
+  dependencies:
+    undici-types: "npm:~6.21.0"
+  checksum: 10/cb060ea17ef9f1fc9d47cfb00098175b25fc6f6bae3c08a89ec7ba1be3353445ccf8af62d88c591e6413c09713f7705a71684a27ef01d2bccac4be96b00cacac
   languageName: node
   linkType: hard
 
@@ -2792,7 +2821,9 @@ __metadata:
   dependencies:
     "@anarkisti/eslint-config": "npm:^1.0.0"
     "@pulumi/cloudflare": "npm:^6.20.0"
+    "@pulumi/netbird": "file:sdks/netbird"
     "@pulumi/pulumi": "npm:^3.150.0"
+    "@pulumi/random": "npm:^4.21.1"
     "@types/node": "npm:^24.0.0"
     dotenv-cli: "npm:^11.0.0"
     eslint: "npm:^10.8.0"
@@ -4053,6 +4084,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"typescript@npm:^4.7.0":
+  version: 4.9.5
+  resolution: "typescript@npm:4.9.5"
+  bin:
+    tsc: bin/tsc
+    tsserver: bin/tsserver
+  checksum: 10/458f7220ab11e0fc191514cc41be1707645ec9a8c2d609448a448e18c522cef9646f58728f6811185a4c35613dacdf6c98cf8965c88b3541d0288c47291e4300
+  languageName: node
+  linkType: hard
+
 "typescript@npm:^6.0.2":
   version: 6.0.3
   resolution: "typescript@npm:6.0.3"
@@ -4063,6 +4104,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"typescript@patch:typescript@npm%3A^4.7.0#optional!builtin<compat/typescript>":
+  version: 4.9.5
+  resolution: "typescript@patch:typescript@npm%3A4.9.5#optional!builtin<compat/typescript>::version=4.9.5&hash=289587"
+  bin:
+    tsc: bin/tsc
+    tsserver: bin/tsserver
+  checksum: 10/5659316360b5cc2d6f5931b346401fa534107b68b60179cf14970e27978f0936c1d5c46f4b5b8175f8cba0430f522b3ce355b4b724c0ea36ce6c0347fab25afd
+  languageName: node
+  linkType: hard
+
 "typescript@patch:typescript@npm%3A^6.0.2#optional!builtin<compat/typescript>":
   version: 6.0.3
   resolution: "typescript@patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"
@@ -4070,6 +4121,13 @@ __metadata:
     tsc: bin/tsc
     tsserver: bin/tsserver
   checksum: 10/22b67a18dafedf9b1468b64ca20d9aa02ea61d449b65413d8aa6552aeb63f52ef369e86beb25b6b4c91a803d9726ee5c196f391a9b64201263263410a4223ee6
+  languageName: node
+  linkType: hard
+
+"undici-types@npm:~6.21.0":
+  version: 6.21.0
+  resolution: "undici-types@npm:6.21.0"
+  checksum: 10/ec8f41aa4359d50f9b59fa61fe3efce3477cc681908c8f84354d8567bb3701fafdddf36ef6bff307024d3feb42c837cf6f670314ba37fc8145e219560e473d14
   languageName: node
   linkType: hard
 

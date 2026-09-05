@@ -8,6 +8,14 @@
   extends: ["config:recommended"],
   automerge: false,
 
+  // The bridged NetBird SDK. `sdks/netbird/package.json` is generator output —
+  // it pins the TypeScript the postinstall would compile it with, not anything
+  // this repository chose — and the way to move it is `pulumi package add`
+  // against a newer provider release, which rewrites the whole tree. A PR
+  // bumping a dependency inside it would edit generated code that the next
+  // regeneration discards.
+  ignorePaths: ["sdks/**"],
+
   // github-actions: the pins in .github/workflows/*.yml, image.yml and this
   // repo's own renovate.yml included. On by default under config:recommended;
   // named here so the coverage is a decision on record, not an assumption.

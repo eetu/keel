@@ -7,6 +7,7 @@ import { renderFirstboot } from "./firstboot";
 import { renderFlightRecorder } from "./flightrecorder";
 import { KEEL_HOSTS_SERVICE, KEEL_HOSTS_TIMER, renderHosts } from "./hosts";
 import { renderMemory } from "./memory";
+import { KEEL_MESH_SERVICE, renderMesh } from "./mesh";
 import { renderNetwork } from "./network";
 import { renderNftables } from "./nftables";
 import { renderNetworks } from "./quadlet";
@@ -54,6 +55,11 @@ const UNITS = [
   // Retries every failed network mount and starts what requires it, every five
   // minutes — systemd's `Restart=` has no counterpart for a mount.
   KEEL_REMOUNT_TIMER,
+  // The mesh agent's daemon. Enabled on every board because there is one image;
+  // one that was never enrolled idles, holding no interface and forwarding
+  // nothing. Not a required unit: a board that is not a peer is a board doing
+  // its job, and greenboot must not roll an image back for it.
+  KEEL_MESH_SERVICE,
   "keel-podman-prune.timer",
   // Listed explicitly even though its own package presets it, so the
   // "every presetted unit is enabled" image check covers the thing that decides
@@ -85,6 +91,29 @@ const VALIDATIONS: readonly Validation[] = [
   { label: "unbound config", command: "mkdir -p /run/unbound && unbound-checkconf" },
 ];
 
+/**
+ * Observations logged at every boot that must never roll an image back.
+ *
+ * Forwarding is the routing peer's whole precondition and it fails in silence:
+ * the mesh connects, the dashboard is green, the routes are there, and every
+ * packet aimed at the LAN is dropped by a kernel that was never told to forward.
+ * Advisory rather than required because a board that forwards nothing is a board
+ * doing its job everywhere else — the failure belongs in the boot log and in the
+ * flight recorder, not in a rollback.
+ */
+const ADVISORIES: readonly Validation[] = [
+  // Written without a double quote in it, because the selftest embeds a check's
+  // command inside one twice — once to run it and once to name it in the
+  // failure. A quote here would close that string and run the rest as shell.
+  {
+    label: "IP forwarding",
+    command: "! sysctl -n net.ipv4.ip_forward net.ipv6.conf.all.forwarding | grep -qvx 1",
+    // The sysctl a container reads is the host's, so the check would report the
+    // laptop that built the image rather than the board that boots it.
+    hostOnly: true,
+  },
+];
+
 export type RenderResult = {
   tree: Tree;
 };
@@ -106,11 +135,12 @@ export function renderAll(): RenderResult {
       renderContainers(),
       renderDns(),
       renderHosts(),
+      renderMesh(),
       renderAlert(),
       renderRemount(),
       renderSelinux(),
       renderNftables(),
-      renderSelftest(REQUIRED_UNITS, VALIDATIONS),
+      renderSelftest(REQUIRED_UNITS, VALIDATIONS, ADVISORIES),
       renderMemory(),
       renderPresets(UNITS),
       renderUpdates(),

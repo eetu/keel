@@ -23,6 +23,14 @@ run "${tag}" bootc container lint --fatal-warnings
 echo "== systemd unit syntax"
 run "${tag}" sh -c 'systemd-analyze verify /usr/lib/systemd/system/keel-*'
 
+# The one binary the image fetches rather than installs from a distribution
+# repository, on an architecture the build host is emulating. A wrong-arch or
+# truncated download passes `sha256sum -c` only if the pin moved with it, and
+# the golden cannot say anything about a file it does not render — so the claim
+# worth asserting is that it runs at all.
+echo "== the mesh agent runs"
+run "${tag}" netbird version
+
 # NET_ADMIN because `nft --check` has no pure-syntax mode — it validates the
 # ruleset against the running kernel, so without the capability it cannot run at
 # all ("cache initialization failed") rather than reporting the ruleset bad.

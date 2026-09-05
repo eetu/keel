@@ -265,6 +265,8 @@ type Upstream = {
   tlsUpstream: boolean;
   /** Stated only by an entry that declared its routers. */
   priority?: number;
+  /** Keeps the allowlist on this router even where the vhost dropped it. */
+  internalOnly?: boolean;
 };
 
 /** A `RemoteSpec` is the only one of the two with an `upstream` — no port to build one from. */
@@ -304,6 +306,7 @@ function routedOf(spec: ServiceSpec | RemoteSpec): Routed | null {
             // the transport that skips verifying a certificate.
             tlsUpstream: tlsUpstream && router.scheme === undefined,
             priority: router.priority,
+            internalOnly: router.reach === "internal",
           })),
   };
 }
@@ -380,9 +383,15 @@ export function renderTraefikRoute(
   if (gated && gate === undefined) {
     throw new Error(`${name} routes through the edge gate, and no gate was resolved`);
   }
-  const middlewares = [
-    ...(publicHosts.includes(subdomain) ? [] : ["internal-only"]),
-    ...(gated ? [chainName(routed)] : []),
+  // What the vhost admits, and what a router may narrow it to. A router says
+  // `reach: "internal"` to keep the allowlist where the vhost dropped it — the
+  // only direction the two may differ, so nothing declared on a router can widen
+  // who reaches the name.
+  const open = publicHosts.includes(subdomain);
+  const chain = gated ? [chainName(routed)] : [];
+  const middlewaresFor = (upstream: Upstream): readonly string[] => [
+    ...(open && upstream.internalOnly !== true ? [] : ["internal-only"]),
+    ...chain,
   ];
 
   const host = `Host(\`${subdomain}.${domain}\`)`;
@@ -397,8 +406,8 @@ export function renderTraefikRoute(
       "        - websecure",
       `      service: ${upstream.name}`,
       ...(upstream.priority === undefined ? [] : [`      priority: ${upstream.priority}`]),
-      ...(middlewares.length > 0
-        ? ["      middlewares:", ...middlewares.map((mw) => `        - ${mw}`)]
+      ...(middlewaresFor(upstream).length > 0
+        ? ["      middlewares:", ...middlewaresFor(upstream).map((mw) => `        - ${mw}`)]
         : []),
       "      tls: {}",
     ]),

@@ -18,6 +18,13 @@ import { PROFILES, resolveMemory } from "../src/config/profiles";
 import { SERVICES } from "../src/config/services";
 import { MASKED_UNITS, REQUIRED_UNITS } from "../src/config/versions";
 import { renderAll } from "../src/render";
+import {
+  KEEL_MESH_SERVICE,
+  MESH_AGENT_BINARY,
+  MESH_INTERFACE,
+  MESH_STATE_DIR,
+} from "../src/render/mesh";
+import { renderNftForward } from "../src/render/nftForward";
 import { NETWORK_INTERFACES } from "../src/render/quadlet";
 import { file, merge } from "../src/render/tree";
 
@@ -102,15 +109,58 @@ describe("the image describes no network and no host", () => {
     expect(tree.get("/etc/hostname")).toBeUndefined();
   });
 
-  it.each(SERVICES)("names $name nowhere", (spec) => {
-    // A blank card boots to a bare machine and the configuration layer installs
-    // what runs on it. So the image stages nothing for a service — no quadlet,
-    // no unit, no memory drop-in, no state directory, no promise in the selftest
-    // — which in its general form is that a service's name occurs nowhere in the
-    // tree. Unbound is a package with no catalog entry and so outside the rule.
-    for (const [path, entry] of tree) {
-      expect(path, path).not.toContain(spec.name);
-      expect(entry.content, path).not.toContain(spec.name);
+  /**
+   * The programs the image installs and runs itself, by the name their binary
+   * carries. Derived rather than listed, so this cannot be widened to quiet a
+   * failure: a name is exempt only because the image genuinely runs something of
+   * that name.
+   */
+  const imagePrograms = [
+    "unbound",
+    MESH_AGENT_BINARY.slice(MESH_AGENT_BINARY.lastIndexOf("/") + 1),
+  ];
+
+  it.each(SERVICES.filter((spec) => !imagePrograms.includes(spec.name)))(
+    "names $name nowhere",
+    (spec) => {
+      // A blank card boots to a bare machine and the configuration layer
+      // installs what runs on it. So the image stages nothing for a service — no
+      // quadlet, no unit, no memory drop-in, no state directory, no promise in
+      // the selftest — which in its general form is that a service's name occurs
+      // nowhere in the tree.
+      for (const [path, entry] of tree) {
+        expect(path, path).not.toContain(spec.name);
+        expect(entry.content, path).not.toContain(spec.name);
+      }
+    },
+  );
+
+  it("stages nothing of a service's even where the image runs a program of that name", () => {
+    // One product, two halves, one on each layer: the mesh coordinator is a
+    // service Pulumi deploys and the mesh *agent* is a binary the image
+    // installs, and they carry one name because they are one product. So the
+    // string rule above cannot hold for that name, and what holds instead is
+    // the thing the string was a proxy for. Every path a deployed service
+    // occupies is derived from its name, and none of them is in the image —
+    // including its state directory, which is what the nightly snapshot covers
+    // and what a second writer would silently join.
+    for (const spec of SERVICES.filter((candidate) => imagePrograms.includes(candidate.name))) {
+      for (const path of [
+        `/usr/share/containers/systemd/${spec.name}.container`,
+        `/etc/containers/systemd/${spec.name}.container`,
+        `/usr/lib/systemd/system/${spec.name}.service`,
+        `/etc/systemd/system/${spec.name}.service.d/50-keel-memory.conf`,
+      ]) {
+        expect(tree.has(path), path).toBe(false);
+      }
+      // The name as a whole path component, so `/var/lib/<name>-agent` — which
+      // is exactly where the image does put the agent's profile — is not read
+      // as the service's own directory.
+      const owned = new RegExp(`/var/lib/${spec.name}(?![A-Za-z0-9._-])`);
+      for (const [path, entry] of tree) {
+        expect(path, path).not.toMatch(owned);
+        expect(entry.content, path).not.toMatch(owned);
+      }
     }
   });
 });
@@ -250,6 +300,72 @@ describe("packet filter", () => {
     const forward = nft.slice(nft.indexOf("chain forward"));
     expect(forward).toContain(`iifname "${NETWORK_INTERFACES.open}" accept`);
     expect(forward).not.toContain(NETWORK_INTERFACES.internal);
+  });
+});
+
+describe("the mesh agent the image carries", () => {
+  const unit = content(`/usr/lib/systemd/system/${KEEL_MESH_SERVICE}`);
+
+  it("says nothing about which mesh", () => {
+    // One image, every board. A management URL, a peer name or a key in here
+    // would make the artefact one installation's — and the deploy passes all
+    // three to `netbird up`, which is where they belong: the machine that runs
+    // this daemon is decided by the card, and the overlay it joins by Pulumi.
+    expect(unit).toContain(`ExecStart=${MESH_AGENT_BINARY} service run`);
+    for (const flag of ["--management-url", "--setup-key", "--hostname", "--wireguard-port"]) {
+      expect(unit, flag).not.toContain(flag);
+    }
+  });
+
+  it("keeps its profile out of every deployed service's state directory", () => {
+    // The client's own default is `/var/lib/netbird`, which on this fleet is the
+    // coordinator's data directory — keel derives that from the entry's name and
+    // the two halves of NetBird share one. Sharing it would put the peer's
+    // private key inside the tree the nightly snapshot covers and inside a bind
+    // mount podman relabels for a container, and nothing would ever say so.
+    for (const spec of SERVICES) {
+      expect(MESH_STATE_DIR, spec.name).not.toBe(`/var/lib/${spec.name}`);
+    }
+    expect(unit).toContain(`Environment=NB_STATE_DIR=${MESH_STATE_DIR}`);
+  });
+
+  it("carries a unit name no quadlet can claim", () => {
+    // A quadlet is materialised into /run/systemd/generator, which outranks
+    // /usr/lib/systemd/system — so a unit here sharing a deployed service's name
+    // would be shadowed by that service's generated one, and the daemon would
+    // silently never start on the one board that runs both halves.
+    for (const spec of SERVICES) {
+      expect(KEEL_MESH_SERVICE, spec.name).not.toBe(`${spec.name}.service`);
+    }
+  });
+
+  it("declares forwarding for both families, and does not lose IPv6 doing it", () => {
+    // A routing peer forwards or it carries nothing, and the kernel refuses
+    // with these off. The `accept_ra` pair is the trap: its default means
+    // "accept router advertisements only while this interface does not
+    // forward", so turning IPv6 forwarding on is by itself a board that stops
+    // configuring its own address off the LAN's router.
+    const sysctl = content("/usr/lib/sysctl.d/99-keel-forwarding.conf");
+    expect(sysctl).toContain("net.ipv4.ip_forward = 1");
+    expect(sysctl).toContain("net.ipv6.conf.all.forwarding = 1");
+    expect(sysctl).toContain("net.ipv6.conf.all.accept_ra = 2");
+    expect(sysctl).toContain("net.ipv6.conf.default.accept_ra = 2");
+  });
+
+  it("forwards for the overlay only where the deploy says this board is the routing peer", () => {
+    // The image's forward chain is policy drop and carries no interface rule for
+    // the mesh, deliberately: which board routes is a property of what it runs.
+    // So the accept comes from the deploy — and without it the agent connects,
+    // the routes exist, the dashboard is green, and every packet a connected
+    // device aims at the LAN dies here.
+    expect(content("/usr/lib/keel/nftables/keel.nft")).not.toContain(MESH_INTERFACE);
+    expect(renderNftForward(false, MESH_INTERFACE)).toContain(`iifname "${MESH_INTERFACE}" accept`);
+    expect(renderNftForward(true)).not.toContain(MESH_INTERFACE);
+    // Present and empty rather than absent, the same rule the port file follows:
+    // a deletion runs after the reload that was withdrawing the rule, so the
+    // reload would re-read the copy still on disk and re-install it.
+    expect(renderNftForward(false)).not.toContain("iifname");
+    expect(renderNftForward(false).length).toBeGreaterThan(0);
   });
 });
 

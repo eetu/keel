@@ -16,9 +16,11 @@ The division of labour is the whole design:
   the device — pihole, traefik, kanidm and oauth2-proxy included, alongside the
   app services — as quadlets it writes and manages, plus their Traefik routes,
   their memory caps, the ports the packet filter admits to them, their encrypted
-  secret blobs, and their public Cloudflare DNS records, with NetBird account
-  state, Kanidm OAuth2 clients, Beszel users, the restic repository and each
-  host's booted image digest still to come as those providers land.
+  secret blobs, their public Cloudflare DNS records, and the mesh — its
+  coordinator's first account, the identity provider it federates to, and the
+  groups, enrolment keys, routes and DNS behind its API — with Kanidm OAuth2
+  clients, the restic repository and each host's booted image digest still to
+  come as those providers land.
 
 The line between them is change frequency. An app service changes weekly and
 `pulumi up` applies it in seconds; the machine changes rarely and costs a reboot.
@@ -415,6 +417,117 @@ because a rotation on every refresh would restart the consumer for no change. A
 account's resource is ordered behind the hub's unit, because an account is made
 by calling something that answers.
 
+**A service that boots unclaimed is claimed by the deploy.** The mesh
+coordinator ships with no account and answers one unauthenticated call that
+creates the owner and hands back a plaintext access token — shown exactly once.
+`BootstrapAccount` (`src/infra/providers/netbirdAccount.ts`) makes that call from
+the board, draws the owner's password inside it, and returns the token as a
+**secret output**. That is the one credential in this repository that lives in
+Pulumi state: the server minted it, keel makes no vault writes, and the
+alternative is a person pasting something before every run. The owner's password
+is kept beside it because the token expires at the server's 365-day cap and the
+local login is the only way back into the account that can mint another — an SSO
+login lands in a _different_ account, since the broker keys an identity on the
+subject its connector issues and a federated subject can never equal a local one.
+The entry declares the paths, the auth scheme, the token's lifetime and the vault
+field a hand-minted token is read from; the address is derived, as the hub
+account's is.
+
+`read` asks whether the account is still there and the token still opens it, and
+answers with the id or with nothing — a wiped store and a revoked token both read
+as gone, and the next `up` claims a fresh coordinator or **fails by name** against
+one that is already claimed. That failure is the one place a `create` cannot
+converge, and its message is the recovery: mint a token in the dashboard and put
+it in the vault field. That field is read _before_ the setup call, so the manual
+path exists whether or not the automatic one ever worked. `delete` does nothing —
+deleting the only account of a running mesh is not something a `pulumi destroy`
+decides.
+
+**A connector is registered once and never deleted.** `BootstrapConnector` is the
+second resource, ordered behind the account whose token authorises it, and it
+registers the identity role's issuer on the coordinator's own broker so that
+signing in there is the fleet's single sign-on. Its `delete` is empty and that is
+load-bearing rather than cautious: a federated identity's subject is minted from
+the user's id _and the connector's_, so a connector deleted and registered again
+gives everyone who has ever signed in a subject the coordinator has never seen —
+which is a brand new, empty account each. So it is matched by name, corrected with
+a PUT on the id that is already there, and it outlives the stack. Its client
+secret is the identity provider's to generate: `kanidm/netbird_client_secret` is
+registered by hand exactly as `kanidm/oauth2_proxy_client_secret` is, and an empty
+field fails by name.
+
+**The mesh's own state is a bridged provider's, not a client written here.**
+Everything behind the coordinator's API — the account settings, the groups, the
+keys a device enrols with, the networks the routing peer carries and the DNS
+those peers use — is declared in `src/infra/netbird.ts` against
+`@pulumi/netbird`, the SDK `pulumi package add terraform-provider
+netbirdio/netbird` generates under `sdks/` and this repository commits, source
+tree and compiled `bin/` both, because CI installs `--immutable` and yarn runs
+no build scripts. It is the trade the public DNS records already make and a
+sharper one: twenty-four resource types and twenty-five data sources arrive with
+a real `read` and a real `diff` each, so a group renamed in the dashboard is
+drift on a refresh and a
+retired route is a deletion in the deploy that retired it — where the old
+repository's reconciler could only converge forward, creating what was missing
+and correcting what had drifted, because a list-and-compare has no way to tell a
+resource somebody else made from one it made and has since stopped declaring.
+**The token is the resource's and never the environment's**: `BootstrapAccount`
+returns the coordinator's access token as a secret output, that output
+configures an explicit `netbird.Provider`, and every resource is handed it — so
+nothing is exported to the process, no vault field holds a second copy, and the
+whole file is ordered behind the account by the plain fact that a provider
+cannot be configured before its token resolves. The cost is the address. A
+bridged provider is a plugin process running where Pulumi runs, so unlike every
+device provider, which reaches the board over ssh, and unlike the two bootstrap
+resources, which deliberately make their calls _on_ the board so the coordinator
+is dialled on its own loopback, this one dials the coordinator's **public
+vhost** from the deploy machine. **So this stack now has to reach that name from
+wherever a deploy is run**, and a preview reaches it too: resolving a group's id
+and the routing peer's address are provider invokes, which fire whenever the
+program is evaluated — the same shape as the Cloudflare zone lookup, for the
+same reason.
+
+---
+
+A second, shorter one, if the routing peer is worth its own line — it is the one
+decision in the port that could have gone the other way:
+
+**A route names a peer, and the board is that peer.** The networks the mesh
+carries and the DNS it answers with are both the board's own agent's, resolved
+from the coordinator by the name that agent enrols under — one string on the
+entry (`routingPeer`), passed to `netbird up --hostname` and looked up again by
+the routes, so there is nowhere for the two to disagree. The agent is a package
+and a unit rather than a quadlet, because the client holds a WireGuard
+interface, opens `/dev/net/tun` and installs a packet-filter table of its own:
+a container would need the capabilities, the device and the host's network
+namespace, which is every isolation a container buys given away, and a quadlet
+cannot say the rest. So the image installs it (`src/render/mesh.ts`,
+`keel-mesh.service`) and the deploy says which mesh: `MeshAgent`
+(`src/infra/meshAgent.ts`) seals the setup key for the board, checks the client
+is actually on the booted image, and `MeshEnrolment` runs the one call. The peer
+lookup that follows is ordered behind it — `dependsOn` on an _invoke_, which the
+engine holds until the resource exists and answers as unknown during a preview —
+so a fresh installation's routes are created in the same `up` that enrols the
+agent, and a preview of a board that has never enrolled plans them instead of
+failing at a name it was about to create.
+
+**The agent's profile is not the coordinator's data directory, and that is a
+decision.** The client's own default state directory is `/var/lib/netbird`,
+which on this fleet is where the _coordinator's_ SQLite store lives — keel
+derives a service's data directory from its entry's name, and the two halves of
+NetBird carry one name. Left alone they would share it: the peer's private key
+inside the tree the nightly snapshot covers, inside a bind mount podman relabels
+at every container start, and a restore of the coordinator's store clobbering the
+board's own identity. `NB_STATE_DIR` on the unit moves it to
+`/var/lib/netbird-agent`, and a test holds it clear of every deployed service's
+`/var/lib/<name>`.
+
+The unit is `keel-mesh.service` for a related reason: `netbird.service` is the
+name quadlet generates for the coordinator's container, in
+`/run/systemd/generator`, which outranks `/usr/lib/systemd/system` — a unit of
+that name in the image would be shadowed by the container's on the one board
+that runs both, and the daemon would silently never start.
+
 **And it talks to the hub from the board, not from here.** Each method sends one
 small Python program to the board's `python3` on stdin and reads a JSON line
 back — one ssh session that waits for the hub, authenticates and does the whole
@@ -502,6 +615,18 @@ test that only pins prose the renderer wrote is not an invariant and does not
 belong: the snapshot already holds the line, and what a test adds is the rule
 behind it — what the board would be silently wrong about if it regressed.
 
+**A public name opens the proxy's port, and nothing else opens it.** A subdomain
+in `publicHosts` is answerable from anywhere or it is nothing: Traefik matches on
+the Host header, so that route has already stopped guarding the vhost by source
+address, and a filter that still dropped :443 from the internet would leave the
+opt-out true in the proxy and false one layer down. So `publicProxyIngress`
+derives the world-facing rule from the deployed set — the proxy's own port, and
+only when a deployed vhost's subdomain is named there. Derived rather than
+declared, because the proxy's entry is committed: an `ingress` line there would
+open 443 to the world for every clone, including the ones whose `publicHosts` is
+empty and whose 443 should answer the LAN alone. The mesh coordinator is the
+entry this exists for, and a name nothing deploys opens nothing.
+
 **The packet filter fails closed.** `table inet keel` ships with policy drop, the
 traffic a machine needs to be on a network at all, SSH, and named sets that are
 empty. An empty set matches nothing, so an image nobody has configured admits
@@ -511,15 +636,48 @@ nothing — no list has to be accurate for that to hold. Elements arrive in
 writes. nft merges a re-declared set additively, so a drop-in adds without
 restating the table.
 
+**Forwarding is host policy, and the accept that uses it is the deploy's.** A
+routing peer forwards between the overlay and the LAN, which the kernel refuses
+with `ip_forward` off — so the image states it
+(`/usr/lib/sysctl.d/99-keel-forwarding.conf`) rather than leaving it to whatever
+the client does to the machine behind everyone's back. On every board, safely,
+because `table inet keel`'s forward chain is policy drop: a board with nothing to
+forward for forwards nothing. What decides whether a packet crosses is
+`20-forward-open.nft`, which the deploy writes from the deployed set — the open
+bridge's egress where something is on that bridge, and `iifname "wt0" accept`
+where the entry says this board enrols as the routing peer. Neither is in the
+image, for the same reason: which board routes is a property of what it runs.
+
 ## Secrets
 
-Secret _values_ never appear in this repo, in the image, or in Pulumi state.
+Secret _values_ never appear in this repo or in the image, and a value that came
+out of the vault never appears in Pulumi state.
 
 Pulumi writes `/etc/secrets/<svc>.env.age`; the age identity that opens it lives
 only on the host, at `/etc/keel/age.key`, placed once by hand. So the state file
 holds a blob it cannot read, `keel-secrets.service` decrypts it at boot, and the
-quadlet reaches it through `EnvironmentFile=` — no secret value is ever a resource
+quadlet reaches it through `EnvironmentFile=` — no vault value is ever a resource
 input.
+
+**Two exceptions, and both are values nobody ever types.** A `ServiceSecretFile` on a
+`setup` is a configuration file whose body carries key material — netbird's
+`config.yaml` and its three keys — and the deploy draws those with
+`@pulumi/random`, composes the body from them, and seals it with `SealedText`
+before `SecretFile` writes it. The drawn values are secret outputs and the body
+is a resource input marked `pulumi.secret()`, so what the checkpoint holds is
+ciphertext under the **stack passphrase** rather than under the board's age
+identity. That is a real difference from everything else here: `state/` is
+gitignored and Syncthing-carried, and the passphrase is what stands between it
+and those keys. It is still not a captured value — capture is what serialises a
+secret into state in the clear, and the rule against it is unchanged. A
+`GeneratedSecret` marked `protect` is one a replacement would cost data for:
+netbird's `store.encryptionKey` is the only key to the mesh's whole store, so
+Pulumi refuses to redraw it and removing the flag is the decision.
+
+The second is the coordinator's own access token and the owner password beside
+it, minted and drawn by `BootstrapAccount` and held as `pulumi.secret` outputs —
+under the same stack passphrase, for the reason above: the server issues the
+token once and there is no vault write to park it in.
 
 **Rotating one is `yarn deploy`.** The vault is not a resource input, so
 a bare `up` compares the inputs it has — the item and the field names — and finds

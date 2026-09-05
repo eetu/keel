@@ -18,3 +18,9 @@ runtime:
 backend:
   url: file://./state
 main: src/infra
+packages:
+  netbird:
+    source: terraform-provider
+    version: 1.4.0
+    parameters:
+      - netbirdio/netbird

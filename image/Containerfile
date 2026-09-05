@@ -115,6 +115,43 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 # bootc lints /boot as having to be empty in the image — ostree makes the real
 # mountpoint at install time.
 
+# The mesh agent, so a board can be a peer of the overlay it coordinates and not
+# only the machine that runs the coordinator. Native rather than a container: the
+# client holds a WireGuard interface, opens /dev/net/tun and installs a
+# packet-filter table of its own, which is every isolation a container buys given
+# away. `src/render/mesh.ts` renders the unit that runs it.
+#
+# The pin is here for the same reason the base image's is: a version the build
+# resolves is a version nobody reviewed. Both halves of NetBird are pinned and
+# they travel together — the coordinator's entry in the catalog is digest-pinned
+# to the server of this same release, and moving one without the other is a
+# client and a server negotiating across a protocol change.
+#
+# The release RPM off GitHub rather than pkgs.netbird.io's repository: a
+# repository is a moving target by construction, and a repository file left in
+# the image is one a later build resolves differently. `tsflags=noscripts` is
+# what makes that safe — the package's %post runs `netbird service install`,
+# which writes /etc/systemd/system/netbird.service and starts it. There is no
+# systemd here to start it with, and that path is the *coordinator's* unit name
+# on the one board that runs both: a file there would shadow the quadlet's
+# generated unit and take the mesh's control plane down with it.
+#
+# `--nogpgcheck` because the signing key is not published anywhere this build can
+# fetch it, and the integrity check is the line after it: the sha256 of the
+# extracted binary, which is the artefact that actually runs. A tampered or
+# truncated download fails the build rather than the board.
+#
+# arm64 in the URL because this image is a Raspberry Pi image — the firmware
+# above says so already.
+ARG NETBIRD_VERSION=0.78.1
+ARG NETBIRD_SHA256=832ccdaa4a63e3e488429c4431d4db0f5aa5dbe632000562ac4af9e8614f4c0b
+RUN dnf -y install --nogpgcheck --setopt=install_weak_deps=False --setopt=tsflags=nodocs,noscripts \
+        "https://github.com/netbirdio/netbird/releases/download/v${NETBIRD_VERSION}/netbird_${NETBIRD_VERSION}_linux_arm64.rpm" \
+    && echo "${NETBIRD_SHA256}  /usr/bin/netbird" | sha256sum -c - \
+    && dnf clean all \
+    && rm -rf /var/cache/* /var/lib/dnf /var/log/* \
+    && { rm -rf /run/* || true; }
+
 # The rendered tree: `yarn render` produces build/root/.
 COPY build/root/ /
 

@@ -1,0 +1,6 @@
+# The bridged provider SDK under `sdks/` is written by `pulumi package add` and
+# rewritten whole every time it is regenerated. Formatting it would put this
+# repository's house style in a diff against the generator's output, which the
+# next regeneration would silently undo — so it is read as it is published and
+# never touched.
+sdks/

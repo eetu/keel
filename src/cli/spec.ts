@@ -24,10 +24,11 @@ import { REMOTES, SERVICES } from "../config/services";
 import {
   backupPath,
   catalogOf,
-  metricsAccountEmail,
+  deployedAccountEmail,
   metricsSecretsPath,
   runSetup,
   secretFields,
+  secretFileShape,
   secretsPath,
   serviceOrigin,
   subdomainOf,
@@ -130,11 +131,46 @@ const resolved = {
       ? null
       : {
           hub: catalog.metrics?.spec.name ?? null,
-          email: metricsAccountEmail(spec, domain),
+          email: deployedAccountEmail(spec, domain),
           role: spec.metricsAccount.role,
           path: metricsSecretsPath(spec),
           variables: [spec.metricsAccount.env.user, spec.metricsAccount.env.password],
         },
+  // The first account the deploy claims on this service, and the identity
+  // provider its own broker federates to. Printable: the address it is claimed
+  // under, where a hand-minted token is read from instead, and the issuer the
+  // connector is registered against — never the token, which exists only once
+  // the resource has run and is a secret output of it.
+  bootstrapAccount:
+    spec.bootstrapAccount === undefined
+      ? null
+      : {
+          email: deployedAccountEmail(spec, domain),
+          owner: spec.bootstrapAccount.name,
+          tokenDays: spec.bootstrapAccount.tokenDays,
+          token: `${spec.bootstrapAccount.token.item}/${spec.bootstrapAccount.token.field}`,
+          connector:
+            spec.bootstrapAccount.connector === undefined || catalog.identity === undefined
+              ? null
+              : {
+                  name: spec.bootstrapAccount.connector.name,
+                  clientId: spec.bootstrapAccount.connector.clientId,
+                  issuer: catalog.identity.role.issuer(
+                    serviceOrigin(catalog.identity.spec, domain),
+                    spec.bootstrapAccount.connector.clientId,
+                  ),
+                  secret:
+                    `${spec.bootstrapAccount.connector.secret.item}/` +
+                    spec.bootstrapAccount.connector.secret.field,
+                },
+        },
+  // The state the deploy holds behind this service's own API rather than on the
+  // board — the overlay's settings, its groups, the keys devices enrol with, the
+  // networks the routing peer carries and the DNS those peers use. Printable
+  // whole: it is composed from the installation and holds no credential, and
+  // the one value that is a secret — a setup key's plaintext — is minted by the
+  // coordinator inside the resource and never appears here.
+  mesh: setup?.mesh ?? null,
   mounts: spec.mounts ?? [],
   backupPath: backupPath(spec),
   backupExclude: spec.backupExclude ?? [],
@@ -143,6 +179,21 @@ const resolved = {
     path: file.path,
     mode: file.mode ?? "644",
     restarts: file.restarts !== false,
+  })),
+  // A file whose body is key material, printed with every value stood in for:
+  // the shape is the reviewable part, and the values do not exist until a deploy
+  // draws them — so what is printable is where the file lands, what it asks for,
+  // and every line of it that is not a secret.
+  secretFiles: (setup?.secretFiles ?? []).map((file) => ({
+    name: file.name,
+    path: file.path,
+    generates: Object.fromEntries(
+      Object.entries(file.generate).map(([name, shape]) => [
+        name,
+        `${shape.bytes} bytes as ${shape.encoding}${shape.protect === true ? ", protected" : ""}`,
+      ]),
+    ),
+    body: secretFileShape(file),
   })),
   quadlet: { path: quadletPath(spec), body: quadlet },
   route:

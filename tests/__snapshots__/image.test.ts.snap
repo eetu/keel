@@ -1094,7 +1094,13 @@ if [ "$mode" = advisory ]; then
         fi
     fi
 
-
+    if systemd-detect-virt --container --quiet; then
+        ok "IP forwarding (skipped: container)"
+    elif ! sysctl -n net.ipv4.ip_forward net.ipv6.conf.all.forwarding | grep -qvx 1 >/dev/null 2>&1; then
+        ok "IP forwarding"
+    else
+        fail "IP forwarding rejected by: ! sysctl -n net.ipv4.ip_forward net.ipv6.conf.all.forwarding | grep -qvx 1"
+    fi
 
     # Advisory on purpose. A blanket "nothing failed" is too broad to be a
     # rollback trigger: one flaky unit would un-deploy a working image.
@@ -1233,6 +1239,15 @@ blacklist algif_aead
 install algif_aead /bin/false
 blacklist algif_skcipher
 install algif_skcipher /bin/false
+"
+`;
+
+exports[`/usr/lib/sysctl.d/99-keel-forwarding.conf > renders the same bytes 1`] = `
+"mode 644
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.all.accept_ra = 2
+net.ipv6.conf.default.accept_ra = 2
 "
 `;
 
@@ -1468,6 +1483,40 @@ ExecStart=/usr/lib/keel/resolve-netbios
 "
 `;
 
+exports[`/usr/lib/systemd/system/keel-mesh.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=NetBird agent — this board's own membership of the mesh
+Documentation=https://docs.netbird.io/how-to/getting-started
+# The daemon brings up a WireGuard interface and installs a packet-filter
+# table beside keel's, so it wants an addressed machine and a loaded filter
+# before it starts rather than racing both.
+Wants=network-online.target
+After=network-online.target nftables.service
+
+[Service]
+Type=simple
+# The profile directory, moved off the client's default — see MESH_STATE_DIR.
+# The daemon and the CLI are one binary and read it at start, so every
+# invocation the deploy makes exports the same value.
+Environment=NB_STATE_DIR=/var/lib/netbird-agent
+# \`--log-file console\` puts the daemon's log in the journal, which is
+# volatile here. Its own default is /var/log/netbird/client.log, a file on
+# the boot medium written continuously for the life of the board.
+ExecStart=/usr/bin/netbird service run --log-level info --log-file console
+Restart=always
+RestartSec=10
+# The peer's private key lives here, and systemd creating the directory is
+# what decides its mode — the daemon would make it itself, later, at
+# whatever the client's own umask gives.
+StateDirectory=netbird-agent
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
 exports[`/usr/lib/systemd/system/keel-podman-prune.service > renders the same bytes 1`] = `
 "mode 644
 [Unit]
@@ -1630,6 +1679,7 @@ enable keel-hosts.service
 enable keel-hosts.timer
 enable keel-alert.timer
 enable keel-remount.timer
+enable keel-mesh.service
 enable keel-podman-prune.timer
 enable greenboot-healthcheck.service
 enable bootc-fetch-apply-updates.timer
