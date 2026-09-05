@@ -3,20 +3,23 @@
  * ssh_config alias, which is also how the providers reach it.
  *
  * Pulumi owns what changes often and has something to read back: the services,
- * their routes, their caps, the ports the packet filter admits to them, and (as
- * they land) the Cloudflare records, Kanidm clients, NetBird account state and
- * each host's booted image digest. The image owns the machine.
+ * their routes, their caps, the ports the packet filter admits to them, the
+ * public DNS records, and (as they land) Kanidm clients, NetBird account state
+ * and each host's booted image digest. The image owns the machine.
  *
- * **Nothing here does I/O.** Pulumi previews by evaluating this file, so a
+ * **Nothing here shells out.** Pulumi previews by evaluating this file, so a
  * registry lookup or a vault read at module scope would fire on every
  * `pulumi preview`. Both live inside resources instead — `ImageDigest` and
- * `SealedEnv` — which is why a preview neither reaches a registry nor asks for
- * Touch ID, and why picking up a moved tag or a rotated credential is
- * `pulumi up --refresh`.
+ * `SealedEnv` — which is why picking up a moved tag or a rotated credential is
+ * `pulumi up --refresh` and neither costs a bare preview anything. The zone
+ * lookup below is the exception and is one on purpose: it is the official
+ * Cloudflare provider's own invoke, so it runs whenever this file is evaluated,
+ * out of a token `scripts/pulumi.ts` puts in the environment beforehand.
  */
 
 import { createHash } from "node:crypto";
 
+import * as cloudflare from "@pulumi/cloudflare";
 import * as pulumi from "@pulumi/pulumi";
 
 import { BACKUP_SECRET_ENV, BACKUP_VAULT_ITEM, RESTIC_IMAGE } from "../config/backup";
@@ -44,7 +47,6 @@ import { NETWORK_NAMES, networkQuadlet } from "../render/quadlet";
 import CertSync from "./certSync";
 import KeelBackup from "./keelBackup";
 import CifsMount from "./mount";
-import { DnsRecord } from "./providers/dnsRecord";
 import { ImageDigest } from "./providers/imageDigest";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedEnv } from "./providers/sealedEnv";
@@ -452,17 +454,31 @@ for (const remote of catalog.remotes) {
  * address Cloudflare cannot reach anyway, and TLS terminates on the board, not
  * at Cloudflare's edge. ttl 120 so a moved address propagates in minutes.
  *
+ * The zone is looked up once for the host rather than per record: the lookup is
+ * a provider invoke, so it is a Cloudflare round-trip every time this file is
+ * evaluated, and twenty of them would be twenty. Nothing looks it up at all on
+ * a host with no public name, which is also what keeps such a stack's preview
+ * free of the API entirely.
+ *
  * No `dependsOn`: a DNS record needs nothing running to be correct, the same
  * as a route file.
  */
-for (const record of publicRecords(catalog, INSTALLATION.network)) {
-  new DnsRecord(`${record.name}-dns`, {
-    vault: INSTALLATION.vault,
-    domain: INSTALLATION.network.domain,
-    name: record.fqdn,
-    content: record.content,
-    ttl: 120,
+const publicNames = publicRecords(catalog, INSTALLATION.network);
+if (publicNames.length > 0) {
+  const { zoneId } = cloudflare.getZoneOutput({
+    filter: { name: INSTALLATION.network.domain },
   });
+  for (const record of publicNames) {
+    new cloudflare.DnsRecord(`${record.name}-dns`, {
+      zoneId,
+      name: record.fqdn,
+      type: "A",
+      content: record.content,
+      ttl: 120,
+      proxied: false,
+      comment: "keel",
+    });
+  }
 }
 
 /**

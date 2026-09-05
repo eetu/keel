@@ -232,20 +232,39 @@ export function traefikMiddlewares({ allowedRanges, gate }: TraefikOptions): str
 }
 
 /**
- * The five facts a route file is actually built from — a service's own vhost
- * fields read down to them, or a remote's, so one renderer serves both without
- * caring which kind of entry it was handed.
+ * What a route file is actually built from — a service's own vhost fields read
+ * down to them, or a remote's, so one renderer serves both without caring which
+ * kind of entry it was handed.
  *
- * `upstream` is always a full URL: `http(s)://127.0.0.1:<port>` for a service,
- * the remote's own otherwise. A remote's `tlsUpstream` is read off that URL's
- * scheme rather than off any field on the entry, so the two cannot disagree.
+ * `upstreams` is one per router: a vhost derives a single one, and an entry that
+ * declares `routers` says what they are.
  */
 type Routed = {
   name: string;
   subdomain: string;
   auth: Auth;
-  upstream: string;
+  upstreams: readonly Upstream[];
+};
+
+/**
+ * One router and the load balancer it forwards to, under one name — Traefik
+ * needs the router to name a service, and a pair that could be named apart is a
+ * pair that can be wired to the wrong half.
+ *
+ * `url` is always a full one: `http(s)://127.0.0.1:<port>` for a service,
+ * `h2c://` where the backend speaks cleartext HTTP/2, the remote's own
+ * otherwise. A remote's `tlsUpstream` is read off that URL's scheme rather than
+ * off any field on the entry, so the two cannot disagree.
+ */
+type Upstream = {
+  name: string;
+  /** ANDed with the vhost's `Host()`; absent is the router that takes the rest. */
+  match?: string;
+  url: string;
+  /** The upstream terminates TLS itself, so the transport skips verifying it. */
   tlsUpstream: boolean;
+  /** Stated only by an entry that declared its routers. */
+  priority?: number;
 };
 
 /** A `RemoteSpec` is the only one of the two with an `upstream` — no port to build one from. */
@@ -260,18 +279,32 @@ function routedOf(spec: ServiceSpec | RemoteSpec): Routed | null {
       name: spec.name,
       subdomain: spec.subdomain,
       auth: spec.auth,
-      upstream: spec.upstream,
-      tlsUpstream: spec.upstream.startsWith("https:"),
+      upstreams: [
+        { name: spec.name, url: spec.upstream, tlsUpstream: spec.upstream.startsWith("https:") },
+      ],
     };
   }
   const subdomain = subdomainOf(spec);
   if (subdomain === null) return null;
+  const tlsUpstream = spec.tlsUpstream === true;
+  const loopback = (port: number, scheme?: string): string =>
+    `${scheme ?? (tlsUpstream ? "https" : "http")}://127.0.0.1:${port}`;
   return {
     name: spec.name,
     subdomain,
     auth: spec.auth,
-    upstream: `${spec.tlsUpstream === true ? "https" : "http"}://127.0.0.1:${spec.port}`,
-    tlsUpstream: spec.tlsUpstream === true,
+    upstreams:
+      spec.routers === undefined
+        ? [{ name: spec.name, url: loopback(spec.port), tlsUpstream }]
+        : spec.routers.map((router) => ({
+            name: router.name === "" ? spec.name : `${spec.name}-${router.name}`,
+            match: router.match,
+            url: loopback(router.port ?? spec.port, router.scheme),
+            // `h2c` is cleartext HTTP/2 — a scheme the upstream speaks, and never
+            // the transport that skips verifying a certificate.
+            tlsUpstream: tlsUpstream && router.scheme === undefined,
+            priority: router.priority,
+          })),
   };
 }
 
@@ -326,6 +359,12 @@ function ssoMiddlewares(routed: Routed, domain: string, gate: Claimed<GateRole>)
  * coordinator is reachable, and Traefik matches on Host header rather than source
  * IP — so a route that forgets the allowlist answers anyone who sets the header.
  * Deny by default, opt out by name.
+ *
+ * An entry that declares `routers` gets one router and one load balancer per
+ * router it names, all under the same `Host()` and all carrying the same
+ * middlewares: what a request may reach follows from the vhost it arrived on,
+ * and a second router on that vhost is a division of its paths rather than a
+ * second answer to who may ask.
  */
 export function renderTraefikRoute(
   spec: ServiceSpec | RemoteSpec,
@@ -333,7 +372,7 @@ export function renderTraefikRoute(
 ): string | null {
   const routed = routedOf(spec);
   if (routed === null) return null;
-  const { name, subdomain, tlsUpstream, upstream } = routed;
+  const { name, subdomain, upstreams } = routed;
 
   const gated = routed.auth === "edge";
   // A chain naming a middleware nothing defines is a router Traefik refuses to
@@ -346,24 +385,31 @@ export function renderTraefikRoute(
     ...(gated ? [chainName(routed)] : []),
   ];
 
+  const host = `Host(\`${subdomain}.${domain}\`)`;
+
   const lines = [
     "http:",
     "  routers:",
-    `    ${name}:`,
-    `      rule: "Host(\`${subdomain}.${domain}\`)"`,
-    "      entryPoints:",
-    "        - websecure",
-    `      service: ${name}`,
-    ...(middlewares.length > 0
-      ? ["      middlewares:", ...middlewares.map((mw) => `        - ${mw}`)]
-      : []),
-    "      tls: {}",
+    ...upstreams.flatMap((upstream) => [
+      `    ${upstream.name}:`,
+      `      rule: "${upstream.match === undefined ? host : `${host} && ${upstream.match}`}"`,
+      "      entryPoints:",
+      "        - websecure",
+      `      service: ${upstream.name}`,
+      ...(upstream.priority === undefined ? [] : [`      priority: ${upstream.priority}`]),
+      ...(middlewares.length > 0
+        ? ["      middlewares:", ...middlewares.map((mw) => `        - ${mw}`)]
+        : []),
+      "      tls: {}",
+    ]),
     "  services:",
-    `    ${name}:`,
-    "      loadBalancer:",
-    ...(tlsUpstream ? [`        serversTransport: ${INSECURE_TRANSPORT}`] : []),
-    "        servers:",
-    `          - url: "${upstream}"`,
+    ...upstreams.flatMap((upstream) => [
+      `    ${upstream.name}:`,
+      "      loadBalancer:",
+      ...(upstream.tlsUpstream ? [`        serversTransport: ${INSECURE_TRANSPORT}`] : []),
+      "        servers:",
+      `          - url: "${upstream.url}"`,
+    ]),
     ...(gated && gate ? ssoMiddlewares(routed, domain, gate) : []),
   ];
 

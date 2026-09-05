@@ -380,8 +380,7 @@ const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
   async diff(_id, olds, news) {
     // A different address, or a hub somewhere else, is a different account — the
     // hub has no rename, so the old record is deleted and a new one created,
-    // rather than left behind under a name nothing points at any more. The same
-    // reading `DnsRecord` makes of a record's name.
+    // rather than left behind under a name nothing points at any more.
     if (olds.email !== news.email || olds.hubUrl !== news.hubUrl) {
       return { changes: true, replaces: ["email", "hubUrl"], deleteBeforeReplace: true };
     }

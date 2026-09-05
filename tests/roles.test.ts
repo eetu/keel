@@ -212,6 +212,76 @@ describe("what a deployed set is missing", () => {
     const { errors } = deploymentGaps(catalogOf([PROXY.spec], [first, second]));
     expect(errors.join("\n")).toMatch(/two entries answer one subdomain: second and first/);
   });
+
+  /** A vhost divided between upstreams: one gRPC, one REST, one catch-all. */
+  const split = (routers: ServiceSpec["routers"], extra: Partial<ServiceSpec> = {}) =>
+    catalogOf([PROXY.spec, plain("split", { subdomain: "split", routers, ...extra })]);
+
+  it("passes an entry whose vhost carries several well-formed routers", () => {
+    expect(
+      deploymentGaps(
+        split([
+          { name: "grpc", match: "PathPrefix(`/rpc.Service/`)", scheme: "h2c", priority: 100 },
+          { name: "api", match: "PathPrefix(`/api`)", priority: 100 },
+          { name: "", port: 9002, priority: 1 },
+        ]),
+      ).errors,
+    ).toEqual([]);
+  });
+
+  it("refuses two routers on one entry called the same thing", () => {
+    // A name is one router and one load balancer, so the second definition wins
+    // the file and the first router simply is not there.
+    const { errors } = deploymentGaps(
+      split([
+        { name: "api", match: "PathPrefix(`/api`)", priority: 100 },
+        { name: "api", match: "PathPrefix(`/rpc`)", priority: 100 },
+      ]),
+    );
+    expect(errors.join("\n")).toMatch(/split declares two routers called 'api'/);
+  });
+
+  it("refuses two routers Traefik would have to choose between", () => {
+    // Equal rules at equal priority is an arbitrary pick, which is a request
+    // answered by the wrong upstream some of the time and by the right one the
+    // rest — the shape nobody can reproduce.
+    const { errors } = deploymentGaps(
+      split([
+        { name: "api", match: "PathPrefix(`/api`)", priority: 100 },
+        { name: "grpc", match: "PathPrefix(`/api`)", priority: 100 },
+      ]),
+    );
+    expect(errors.join("\n")).toMatch(/two routers at priority 100 matching 'PathPrefix/);
+  });
+
+  it("refuses a router that spells a host of its own", () => {
+    // The allowlist and the gate are attached per vhost, so a router matching a
+    // host the entry does not have is a name reachable with neither.
+    const { errors } = deploymentGaps(
+      split([
+        { name: "other", match: "Host(`elsewhere.example.test`)", priority: 100 },
+        { name: "", priority: 1 },
+      ]),
+    );
+    expect(errors.join("\n")).toMatch(/'other' router matches on Host\(/);
+  });
+
+  it("refuses routers on an entry with no vhost to put them on", () => {
+    const { errors } = deploymentGaps(split([{ name: "", priority: 1 }], { subdomain: null }));
+    expect(errors.join("\n")).toMatch(/split declares routers and no vhost/);
+  });
+
+  it("refuses more than one router with no match", () => {
+    // Exactly one takes what the others leave. Two of them is the arbitrary pick
+    // again, and it is the catch-all that swallows everything.
+    const { errors } = deploymentGaps(
+      split([
+        { name: "", priority: 1 },
+        { name: "spare", priority: 2 },
+      ]),
+    );
+    expect(errors.join("\n")).toMatch(/split declares 2 routers with no match/);
+  });
 });
 
 describe("the order a deployed set is started in", () => {

@@ -1022,6 +1022,56 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@pulumi/cloudflare@npm:^6.20.0":
+  version: 6.20.0
+  resolution: "@pulumi/cloudflare@npm:6.20.0"
+  dependencies:
+    "@pulumi/pulumi": "npm:^3.142.0"
+  checksum: 10/47d9f996031e6614bca019e78a769710329bc67cef37333dee853a787ec7b043dcc6d86e6949840827fad3eff88221d6eb7aeb4c8a90338ce6435f98cb539855
+  languageName: node
+  linkType: hard
+
+"@pulumi/pulumi@npm:^3.142.0":
+  version: 3.261.0
+  resolution: "@pulumi/pulumi@npm:3.261.0"
+  dependencies:
+    "@grpc/grpc-js": "npm:^1.10.1"
+    "@logdna/tail-file": "npm:^2.0.6"
+    "@npmcli/arborist": "npm:^9.0.0"
+    "@opentelemetry/api": "npm:^1.9"
+    "@opentelemetry/core": "npm:^2.9"
+    "@opentelemetry/exporter-trace-otlp-grpc": "npm:^0.220"
+    "@opentelemetry/exporter-zipkin": "npm:^2.9"
+    "@opentelemetry/instrumentation": "npm:^0.220"
+    "@opentelemetry/instrumentation-grpc": "npm:^0.220"
+    "@opentelemetry/resources": "npm:^2.9"
+    "@opentelemetry/sdk-trace-base": "npm:^2.9"
+    "@opentelemetry/sdk-trace-node": "npm:^2.9"
+    "@opentelemetry/semantic-conventions": "npm:^1.42"
+    "@types/google-protobuf": "npm:^3.15.5"
+    "@types/semver": "npm:^7.5.6"
+    execa: "npm:^5.1.0"
+    google-protobuf: "npm:^3.21.4"
+    ini: "npm:^2.0.0"
+    js-yaml: "npm:^4.0.0"
+    minimist: "npm:^1.2.6"
+    normalize-package-data: "npm:^6.0.0"
+    require-from-string: "npm:^2.0.1"
+    semver: "npm:^7.5.2"
+    source-map-support: "npm:^0.5.6"
+    upath: "npm:^1.1.0"
+  peerDependencies:
+    ts-node: ">= 7.0.1 < 12"
+    typescript: ">= 3.8.3 < 7"
+  peerDependenciesMeta:
+    ts-node:
+      optional: true
+    typescript:
+      optional: true
+  checksum: 10/fd876293f63e55397d8dbc591ec2c39f39c2713005052dfd4c1c55ffd4bd034fc7e5c24c31e97d13c120953f3293d455be369e810b298784125b6fe3d9eebba8
+  languageName: node
+  linkType: hard
+
 "@pulumi/pulumi@npm:^3.150.0":
   version: 3.259.0
   resolution: "@pulumi/pulumi@npm:3.259.0"
@@ -2741,6 +2791,7 @@ __metadata:
   resolution: "keel@workspace:."
   dependencies:
     "@anarkisti/eslint-config": "npm:^1.0.0"
+    "@pulumi/cloudflare": "npm:^6.20.0"
     "@pulumi/pulumi": "npm:^3.150.0"
     "@types/node": "npm:^24.0.0"
     dotenv-cli: "npm:^11.0.0"

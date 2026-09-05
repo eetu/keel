@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 
 import { SERVICES } from "../src/config/services";
 import { secretsPath } from "../src/config/spec";
-import { decide } from "../src/infra/providers/dnsRecord";
 import { assertWritablePath } from "../src/infra/providers/remoteFile";
 import { assertCiphertext } from "../src/infra/providers/secretFile";
 import { assertSafePath, assertSafeUnit, run } from "../src/infra/ssh";
@@ -48,32 +47,6 @@ describe("what may be written to a device", () => {
       /empty ciphertext/,
     );
     expect(() => assertCiphertext("-----BEGIN AGE ENCRYPTED FILE-----", "/x")).not.toThrow();
-  });
-});
-
-describe("adopting an existing Cloudflare record", () => {
-  const wanted = { content: "192.0.2.10", ttl: 120 };
-
-  it("creates when the zone has no matching record", () => {
-    expect(decide([], wanted)).toEqual({ action: "create" });
-  });
-
-  it("adopts a lone match whose content and ttl already agree", () => {
-    const record = { id: "rec1", ...wanted };
-    expect(decide([record], wanted)).toEqual({ action: "adopt", id: "rec1" });
-  });
-
-  it("patches a lone match whose content or ttl disagree", () => {
-    const record = { id: "rec1", content: "192.0.2.99", ttl: 300 };
-    expect(decide([record], wanted)).toEqual({ action: "patch", id: "rec1" });
-  });
-
-  it("refuses to pick among more than one match", () => {
-    const records = [
-      { id: "rec1", ...wanted },
-      { id: "rec2", content: "192.0.2.99", ttl: 300 },
-    ];
-    expect(decide(records, wanted)).toEqual({ action: "ambiguous", ids: ["rec1", "rec2"] });
   });
 });
 

@@ -42,7 +42,8 @@ built from them:
   `.*-stamp` files and the shell that compared them. `action: "reload"` marks a
   unit the image owns and Pulumi only reconfigures — `nftables.service` — whose
   delete leaves it running.
-- **`ImageDigest`** and **`SealedEnv`** exist so that a preview does nothing.
+- **`ImageDigest`** and **`SealedEnv`** exist so that neither a registry
+  round-trip nor a Touch ID prompt is the price of asking what would change.
   Resolving a rolling tag is a registry round-trip and reading the vault is a
   Touch ID prompt; in the program body both would fire on every `pulumi preview`.
   Inside a resource they fire on `create`, `update` and `read` — on `up` and on
@@ -138,9 +139,14 @@ yarn test:integration         # tier 3: the device providers against a booted im
 image/build.sh [tag]          # render + podman build --arch arm64 (default keel:latest)
 image/test.sh [tag]           # tier 2: bootc lint, unit syntax, generator profiles
 image/card.sh <host>          # build, shrink, add the Pi firmware and keel.conf, boot-test
-yarn preview -s <host>        # pulumi preview --refresh, .env-loaded
-yarn deploy -s <host>             # pulumi up --refresh, .env-loaded
+yarn preview -s <host>        # pulumi preview --refresh, vault- and .env-loaded
+yarn deploy -s <host>         # pulumi up --refresh, vault- and .env-loaded
 ```
+
+The last two go through `scripts/pulumi.ts`, which warms the 1Password session,
+reads the Cloudflare token into `CLOUDFLARE_API_TOKEN` and loads `.env` before it
+spawns the vendored CLI — so both want a terminal 1Password can prompt, a
+preview included. `yarn pulumi <args>` is the CLI with `.env` and nothing else.
 
 A fresh clone wants `installation.example.ts` and `services.local.example.ts`
 copied over their real names first; everything above needs the two present on
@@ -430,23 +436,28 @@ adding a vhost is a hosts line and retiring one removes it, both in the same
 deploy that changed the catalog, and the resolver never restarts either way.
 Public records (`publicDns: true`) are keel's too now — see the next paragraph.
 
-**A public name is a resource, and its token never leaves the call.**
-`DnsRecord` (`src/infra/providers/dnsRecord.ts`) writes one Cloudflare A record
+**A public name is a `cloudflare.DnsRecord`, and its token is in the deploy's
+environment before Pulumi starts.** `src/infra/index.ts` declares one A record
 per `publicDns: true` vhost — service and remote alike, from
-`publicRecords(catalog)` in `src/config/spec.ts` — pointing at the same
-`lanAddress` the hosts file does. `read` re-asks Cloudflare on every refresh, so
-a record edited by hand in the dashboard surfaces as drift the same way a
-rotated secret does, and retiring the entry deletes the record in the same
-deploy. `create` adopts rather than assumes an empty zone: the old repository
-populated it by hand, so a record already answering that name and type is
-matched and taken over — patched first if its content or ttl disagree, left for
-a person to resolve if more than one exists. Not `@pulumi/cloudflare`: that
-provider configures itself at preview time, from a token that would have to sit
-in the process environment or in stack config either way — a plaintext file on
-disk, or a value in state. This is a dynamic provider instead, so the token is
-read from the vault inside `create`, `update`, `read` and `delete` alone, never
-captured and never printed — the same shape `SealedEnv` uses, and like every
-vault read it runs from a terminal `op` can prompt, never on a bare preview.
+`publicRecords(catalog, INSTALLATION.network)` in `src/config/spec.ts` —
+pointing at the same `lanAddress` the hosts file does, through the official
+`@pulumi/cloudflare`. So a record edited by hand in the dashboard surfaces as
+drift on a refresh the same way a rotated secret does, and retiring the entry
+deletes the record in the same deploy, with no hand-written API client in this
+repository to keep abreast of somebody else's product. The zone is one
+`getZoneOutput({ filter: { name: domain } })` for the whole host rather than one
+per record, and a host with no public name looks it up not at all. The token is
+the `cloudflare` login item's password — the same field the proxy's DNS-01
+challenge reads — and it reaches the provider as `CLOUDFLARE_API_TOKEN`, put
+there by `scripts/pulumi.ts`, which reads the vault and loads `.env` before it
+spawns the CLI. That is the trade this provider is worth: it configures itself
+while the program is being evaluated, which is `preview` as much as `up`, so
+**a preview of this stack now reads the vault** and wants a terminal 1Password
+can prompt. The zone the old repository populated is adopted by recreation
+rather than imported — the first `up` after this change creates the provider's
+records and deletes the dynamic ones afterwards, since Pulumi runs deletions
+last, so each name carries two identical A records for the length of one run
+and ends with one.
 
 **A route to another machine is an entry of its own shape.** A `RemoteSpec` is
 a vhost whose upstream is not on this board: it gets the route, the LAN record
@@ -459,6 +470,26 @@ with a service or another remote, and `auth` means the same as it does on a
 service except `oidc`, which a remote is refused outright — it runs its own
 login flow or none, because the board has no client to hand something it does
 not run.
+
+**A vhost may carry more than one router, and the priorities are the entry's to
+state.** `routers` on a `ServiceSpec` replaces the single router a vhost derives
+with one router and one load balancer per element — a suffix on the entry's name,
+a rule fragment ANDed with the vhost's `Host()`, a port, and a priority. The
+priority is stated because Traefik's own default is the length of the rule: an
+order nobody wrote down, which changes when a path is added to a match and hands
+the catch-all what the API was answering. `scheme: "h2c"` dials an upstream as
+cleartext HTTP/2, which gRPC needs — over a plain HTTP/1 backend a client fails
+on the content type, which reads as the application's bug rather than the
+route's. **Every router on the vhost carries the same middlewares**: the
+allowlist and the gate chain are keyed to the name a request arrives on and never
+to the router that matched it, so several routers are a division of one vhost's
+paths rather than a second answer to who may reach it. `deploymentGaps` refuses
+the ways that division is written wrong — two routers under one name, two Traefik
+would pick between arbitrarily, a match spelling a `Host(` of its own, more than
+one router with no match, and routers on an entry with no vhost. netbird is the
+entry that needed it: management and signal are gRPC on an h2c upstream, the REST
+API and the relay's websocket are HTTP/1 on the same port, and the dashboard SPA
+is another container behind the catch-all.
 
 **`merge()` refuses duplicate paths.** Two renderers writing one file is always a
 bug. Do not work around it by renaming the file.
@@ -496,8 +527,10 @@ them unchanged. `SealedEnv`'s `read` is what asks 1Password what the value is
 now, and `read` runs on a refresh: a value rotated there surfaces as drift on
 that resource, and the new hash cascades from it into the blob, the decrypt and
 the restart of the service that reads it, all in one run. The same command picks
-up a moved rolling tag, for the same reason. Touch ID prompts on `up` and on
-`refresh` and never on a bare preview. A field name invented to look plausible
+up a moved rolling tag, for the same reason. A `SealedEnv` prompts on `up` and on
+`refresh` and never on a preview; what prompts before every `yarn preview` is a
+different read for a different reason — the Cloudflare token `scripts/pulumi.ts`
+puts in the environment. A field name invented to look plausible
 fails at deploy time with `<item>/<field> is empty or unreadable` — check field
 names against the vault, not against a guess; the old repo's `group_data`
 declared fields its `secrets.py` never wrote.
@@ -775,21 +808,30 @@ or unreadable`. Where in the run it fails is deliberate: **a `SealedEnv`
 - **Pulumi previews by evaluating the program.** Any side effect in the program
   fires on `pulumi preview`. Generated secrets, registry lookups and prompts must
   live behind a resource, never at module scope — which is what `ImageDigest` and
-  `SealedEnv` are for. `src/infra/index.ts` calls nothing that shells out, and a
-  preview run with `op`, `skopeo`, `podman` and `age` off `PATH` is how that is
-  checked.
+  `SealedEnv` are for. `src/infra/index.ts` still calls nothing that shells out,
+  and a preview run with `op`, `skopeo`, `podman` and `age` off `PATH` is how
+  that is checked. What a preview does now reach is Cloudflare: the zone lookup
+  is `@pulumi/cloudflare`'s own invoke and the provider configures itself from
+  `CLOUDFLARE_API_TOKEN` while the program is being evaluated. Without that
+  variable the whole preview fails — `403 Forbidden … 9106 Missing X-Auth-Email
+header`, then one `error serializing property "zoneId"` per record, and
+  `1 errored` beside the unchanged count. `yarn preview` puts the token there;
+  `yarn pulumi preview` does not.
 - **A bare `preview` does not read the device.** It compares desired inputs
   against stored state. Drift on a host only surfaces under `pulumi refresh` or
   `preview --refresh`, so a deploy that wants to be sure of what it is changing
-  passes `--refresh`. `tests/integration/run.sh` asserts both halves of this.
+  passes `--refresh`. `tests/integration/run.sh` asserts both halves of this. The
+  device is what it does not read: the zone lookup above happens either way.
 - **`op` refuses a biometric prompt from a shell with no terminal session.** The
   1Password CLI answers `authorization prompt dismissed, please try again` when
   called from an agent's or a script's shell, and every `SealedEnv` read is an
   `op read` (`src/infra/vault.ts`) — so `yarn preview -s <host>` and
   `yarn deploy -s <host>` (both already `--refresh`) have to run from a terminal
-  the desktop app can prompt. From anywhere else every vault read fails and the
-  refresh stops before applying anything. A bare `pulumi preview` (no refresh)
-  touches neither the vault nor the device and runs from anywhere.
+  the desktop app can prompt. Both fail in the first second now rather than at
+  the first resource: `scripts/pulumi.ts` warms the session and reads the
+  Cloudflare token before it spawns the CLI. `yarn pulumi preview` (no refresh)
+  touches neither the vault nor the device, and stops at the zone lookup instead
+  unless `CLOUDFLARE_API_TOKEN` is already in the environment.
 - **Pulumi in a non-interactive shell wants `--yes`.**
   `yarn deploy -s <host> --yes`; without it the CLI exits with "--yes or
   --skip-preview or --preview-only must be passed in to proceed when running in
@@ -834,7 +876,7 @@ or unreadable`. Where in the run it fails is deliberate: **a `SealedEnv`
 
 `../raspi` is authoritative for anything not listed here. LAN DNS is keel's own,
 a hosts file Pi-hole's entry derives from the catalog, and so is public DNS now
-— `DnsRecord` writes the A record for every `publicDns: true` vhost. Cloudflare
+— a `cloudflare.DnsRecord` per `publicDns: true` vhost. Cloudflare
 was the only resource both repos could touch, and `cloudflare_dns` left the old
 repository's `DEPLOY` in this change, because its orphan reaper deleted any
 LAN-pointing A record it did not know about — left running, it would have

@@ -21,10 +21,11 @@
     "card": "image/card.sh",
     "qemu-test": "image/qemu-test.sh",
     "pulumi": "dotenv -e .env -- pulumi",
-    "preview": "op vault list >/dev/null && dotenv -e .env -- pulumi preview --refresh --parallel 4",
-    "deploy": "op vault list >/dev/null && dotenv -e .env -- pulumi up --refresh --parallel 4"
+    "preview": "node --import tsx scripts/pulumi.ts preview --refresh --parallel 4",
+    "deploy": "node --import tsx scripts/pulumi.ts up --refresh --parallel 4"
   },
   "dependencies": {
+    "@pulumi/cloudflare": "^6.20.0",
     "@pulumi/pulumi": "^3.150.0"
   },
   "devDependencies": {

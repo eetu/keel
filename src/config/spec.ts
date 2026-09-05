@@ -117,6 +117,33 @@ export type RouteContext = {
 };
 
 /**
+ * One router on an entry's vhost, for a service whose paths are not all one
+ * upstream — gRPC on a cleartext HTTP/2 backend, a REST API on the same port, a
+ * dashboard on another container's.
+ *
+ * Declaring any replaces the single router a vhost otherwise derives, and every
+ * one of them carries that vhost's middlewares: the allowlist and the gate are
+ * properties of the name a request arrives on rather than of the router that
+ * happens to match it, so a second router is never a way past either.
+ *
+ * The priority is stated because Traefik's own default is the length of the
+ * rule — an order nobody wrote down, which changes when a path is added to a
+ * match and silently hands a catch-all what the API was answering.
+ */
+export type Router = {
+  /** Suffix on the entry's name; `""` is the entry's own name. */
+  name: string;
+  /** Matched in addition to the vhost's `Host()` — a Traefik rule fragment. */
+  match?: string;
+  /** Which port this router forwards to; the entry's own by default. */
+  port?: number;
+  /** `h2c` for a cleartext HTTP/2 backend, which gRPC needs. */
+  scheme?: "h2c";
+  /** Higher wins. Traefik's default is the rule's length, so state it. */
+  priority: number;
+};
+
+/**
  * A route to a service the board does not run.
  *
  * No image, no unit, no memory cap, no firewall rule and no backup: a
@@ -359,6 +386,13 @@ export type ServiceSpec = {
   ingress?: Ingress;
   /** `null` for a service with no web surface. Defaults to `name`. */
   subdomain?: string | null;
+  /**
+   * The routers on this entry's vhost, where one is not enough: an entry whose
+   * paths divide between upstreams states them here and the derived single
+   * router is replaced by exactly what it says. Exactly one of them omits its
+   * `match` and takes everything the others do not.
+   */
+  routers?: readonly Router[];
   /**
    * The service speaks TLS on its own port, so the proxy reaches it over https.
    * For one that has no plaintext listener at all — the certificate is its own,
@@ -751,6 +785,54 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
   }
   if (subdomainClashes.length > 0) {
     errors.push(`two entries answer one subdomain: ${subdomainClashes.join("; ")}`);
+  }
+
+  // Several routers on one vhost divide that vhost's paths, and every way of
+  // writing the division wrong is a request answered by the wrong upstream with
+  // nothing in any log about it.
+  for (const spec of catalog.services) {
+    if (spec.routers === undefined) continue;
+    if (subdomainOf(spec) === null) {
+      errors.push(
+        `${spec.name} declares routers and no vhost — a router divides one vhost's paths, so ` +
+          "give the entry a subdomain or drop the routers",
+      );
+    }
+    const names = new Set<string>();
+    const rules = new Set<string>();
+    for (const router of spec.routers) {
+      if (names.has(router.name)) {
+        errors.push(
+          `${spec.name} declares two routers called '${router.name}' — one name is one router ` +
+            "and one load balancer, so the second would replace the first; name them apart",
+        );
+      }
+      names.add(router.name);
+      if (router.match?.includes("Host(") === true) {
+        errors.push(
+          `${spec.name}'s '${router.name}' router matches on Host( — the host is the entry's ` +
+            "vhost and the allowlist is keyed to it, so a router spelling its own is a way past " +
+            "it; match on the path and let the vhost say the host",
+        );
+      }
+      if (router.match === undefined) continue;
+      const rule = `${router.priority} ${router.match}`;
+      if (rules.has(rule)) {
+        errors.push(
+          `${spec.name} declares two routers at priority ${router.priority} matching ` +
+            `'${router.match}' — Traefik picks between equal rules arbitrarily, so say which ` +
+            "one wins with a priority of its own",
+        );
+      }
+      rules.add(rule);
+    }
+    const catchAll = spec.routers.filter((router) => router.match === undefined);
+    if (catchAll.length > 1) {
+      errors.push(
+        `${spec.name} declares ${catchAll.length} routers with no match — exactly one takes what ` +
+          "the others leave, so give the rest a match of their own",
+      );
+    }
   }
 
   const clients = catalog.services.filter((spec) => spec.auth === "oidc");

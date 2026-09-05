@@ -14,10 +14,11 @@ Two halves, split by what each is good at:
   a particular machine comes from [`keel.conf`](#keelconf) on its card.
 - **Pulumi** owns the workloads and everything with an API to read back: the
   services on the device, their routes, their memory caps, the ports the packet
-  filter admits to them, their encrypted secret blobs, and the nightly restic
-  snapshot of everything they keep. Cloudflare DNS, the NetBird account, Kanidm
-  OAuth2 clients, Beszel users and which image digest each host is booted into
-  are planned — the providers for them do not exist yet.
+  filter admits to them, their encrypted secret blobs, the nightly restic
+  snapshot of everything they keep, the public DNS record behind every name that
+  has one, and the read-only account a metrics hub hands its dashboard. The
+  NetBird account, Kanidm OAuth2 clients and which image digest each host is
+  booted into are planned — the providers for them do not exist yet.
 
 The line between them is change frequency. An app service changes weekly and
 `pulumi up` applies it in seconds; the machine changes rarely and costs a reboot.
@@ -31,15 +32,18 @@ all derive from it, and the half that names your house comes from the entry's ow
 `setup(installation)`. Configuring a service is editing that one entry, plus
 values in the single `INSTALLATION` object when it needs any: nothing to
 register, no table to add a name to, no dispatch to extend. Dynamic providers do
-the work, every one of them
+the device half, every one of them
 implementing `read`: `RemoteFile` and `SystemdUnit` so `pulumi refresh` — or
 `preview --refresh` — sees a hand-edited file or a stopped unit, `SecretFile` for
 the sealed blob, and `ImageDigest` and `SealedEnv` so that resolving a moving tag
 and reading the vault happen inside a resource rather than in the program. That
-last part is what makes a preview free of side effects: it prompts for nothing
-and reaches no registry. A bare `preview` compares desired inputs against stored
-state and never consults the host, the vault or the registry; what `read` buys is
-that a refresh has something to ask. Deleting a service is deleting its entry.
+last part is what keeps a preview cheap: no registry round-trip and no Touch ID
+prompt for a service's own secrets. A bare `preview` compares desired inputs
+against stored state and never consults the host; what `read` buys is that a
+refresh has something to ask. Public DNS is the exception — `@pulumi/cloudflare`
+configures itself and looks the zone up while the program is being evaluated, so
+`yarn preview` reads that one API token out of the vault before Pulumi starts,
+exactly as `yarn deploy` does. Deleting a service is deleting its entry.
 
 The predecessor, [`raspi`](../raspi), remains the live setup until a host has
 been migrated. Nothing here touches a host the migration plan has not reached.
@@ -50,7 +54,10 @@ been migrated. Nothing here touches a host the migration plan has not reached.
 
 - **LAN DNS with ad blocking** — Pi-hole answering :53, in front of a native
   Unbound recursor. The image brings Unbound up on its own, so a board resolves
-  before anything is deployed to it.
+  before anything is deployed to it. Every vhost's name is a line Pi-hole's own
+  entry derives from the catalog, and a name that opts into `publicDns` is a
+  Cloudflare A record beside it — so adding a service adds both and retiring one
+  removes both.
 - **A wildcard certificate** for `*.your.domain`, issued over **DNS-01**. Port 80
   is never opened: there is no HTTP challenge to answer and no redirect to serve.
 - **SSO in front of every service** — Kanidm as the OIDC issuer, oauth2-proxy as
@@ -68,9 +75,11 @@ been migrated. Nothing here touches a host the migration plan has not reached.
 
 **What you supply**
 
-- **A domain on Cloudflare.** The DNS-01 challenge is a Cloudflare API token,
-  read from the vault. Another registrar means another `dnsChallenge` provider in
-  `src/adapters/traefik.ts` and that provider's own credential.
+- **A domain on Cloudflare.** One API token, read from the vault, does two
+  jobs: the DNS-01 challenge for the wildcard, and the A record behind every
+  public name. Another registrar means another `dnsChallenge` provider in
+  `src/adapters/traefik.ts`, that provider's own credential, and its own Pulumi
+  provider in place of `@pulumi/cloudflare` for the records.
 - **A 1Password vault**, holding the fields each entry names — or the willingness
   to swap it out: every secret is read by `src/infra/vault.ts` at deploy time and
   sealed to the host, so replacing that one module replaces the vault. Which
@@ -157,18 +166,19 @@ resource that seals it, as the service that needs it is deployed — so a missin
 one fails that service and whatever waits on it, naming `item/field` and what
 would have been deployed blank, while the services ahead of it in the graph are
 already on the device. Checking the whole list in the program body instead would
-put a vault read where it fires on every `pulumi preview`, which is the side
-effect the layer is arranged to keep out. One row per field the example catalog
-reads, in the vault `installation.ts` names:
+put every one of those reads where it fires on every `pulumi preview` — a prompt
+per field before anything is planned, which is what a read inside the resource
+keeps out. One row per field the example catalog reads, in the vault
+`installation.ts` names:
 
-| Field                               | What reads it                                                    |
-| ----------------------------------- | ---------------------------------------------------------------- |
-| `cloudflare/password`               | Traefik, as the DNS-01 token for the wildcard certificate        |
-| `oauth2-proxy/cookie_secret`        | The gate's session cookie — 32 random bytes, base64              |
-| `kanidm/oauth2_proxy_client_secret` | The gate's OIDC client secret, the one Kanidm issues on register |
-| `vaultwarden/admin_token`           | Vaultwarden's admin page                                         |
-| `vaultwarden/smtp_email`            | The relay login, which is also the From address                  |
-| `vaultwarden/smtp_password`         | That login's password                                            |
+| Field                               | What reads it                                                         |
+| ----------------------------------- | --------------------------------------------------------------------- |
+| `cloudflare/password`               | Traefik's DNS-01 challenge, and the A record behind every public name |
+| `oauth2-proxy/cookie_secret`        | The gate's session cookie — 32 random bytes, base64                   |
+| `kanidm/oauth2_proxy_client_secret` | The gate's OIDC client secret, the one Kanidm issues on register      |
+| `vaultwarden/admin_token`           | Vaultwarden's admin page                                              |
+| `vaultwarden/smtp_email`            | The relay login, which is also the From address                       |
+| `vaultwarden/smtp_password`         | That login's password                                                 |
 
 A host that states `backup: true` reads three more — `restic/password`
 for the repository, and `cifs/readwrite_username` with `cifs/readwrite_password`
@@ -231,18 +241,14 @@ See [flashing a card](#flashing-a-card-and-bringing-a-host-up) for the whole of
 steps 2 to 5 at length: what `card.sh` does, why the state lives where it does,
 and what to look at when a board does not come up.
 
-**What is not there yet.** Three things are still manual, and none of them is
-hidden by a resource that pretends otherwise:
+**What is not there yet.** One thing is still manual, and it is not hidden by a
+resource that pretends otherwise:
 
-- **DNS records.** The vhost names have to resolve to the board's LAN address;
-  create the records at your registrar by hand. Pulumi does not manage Cloudflare
-  yet.
 - **OAuth2 clients in Kanidm.** Register `oauth2-proxy` as a client with Kanidm's
   own CLI and put the secret it generates into the vault, where the gate's entry
   reads it. Nothing registers it for you, which is what makes step 5 two passes —
   and the same is true of every service that runs a client of its own, so an
   `auth: "oidc"` entry needs the registration before its first login.
-- **Monitoring.** Nothing watches the fleet.
 
 See [Roadmap](#roadmap).
 
@@ -590,8 +596,8 @@ it together with the private config files, so one Syncthing folder moves
 everything a deploy needs). It holds no secret values — that is what sealing to
 the host's identity buys — so the passphrase protects stack config and nothing
 else. The loader and the state directory are `Pulumi.yaml`'s own — `nodeargs`
-and `backend.url` — so the passphrase is the one variable a deploy needs, and it
-lives in `.env` (gitignored, Syncthing-carried; copy `.env.example` and fill it
+and `backend.url` — so the passphrase is the one variable you supply by hand, and
+it lives in `.env` (gitignored, Syncthing-carried; copy `.env.example` and fill it
 in once). `yarn pulumi`, `yarn preview` and `yarn deploy` load it for the command
 they run:
 
@@ -599,9 +605,14 @@ they run:
 yarn pulumi stack init raspi        # once
 ```
 
+The other variable a deploy needs comes out of the vault rather than from you:
+`scripts/pulumi.ts` reads the Cloudflare token and hands it to the CLI as
+`CLOUDFLARE_API_TOKEN`, which is why `yarn preview` and `yarn deploy` both want a
+terminal 1Password can prompt.
+
 The passphrase can stay out of `.env` — leave the line empty there and export it
-per session instead; `dotenv-cli` never overrides a variable already set, only
-one that is missing:
+per session instead; what loads the file never overrides a variable already set,
+only one that is missing:
 
 ```fish
 set -x PULUMI_CONFIG_PASSPHRASE (op read op://<your vault>/keel/password)
@@ -763,7 +774,8 @@ and the field names, and those do not change when the value does; asking
 1Password what the value is now is the `SealedEnv` resource's `read`, and `read`
 is what a refresh calls. The rotated value then flows through as one run: a new
 hash, a new blob, a decrypt on the host, and a restart of the service that reads
-it. A refresh prompts for Touch ID, as a deploy does; a bare `preview` does not.
+it. A refresh prompts for Touch ID, as a deploy does, and so does the preview
+beside it — `yarn preview` reads the Cloudflare token before Pulumi starts.
 
 ```fish
 yarn deploy -s <host>
@@ -831,16 +843,16 @@ window, and the first run forgets the rest.
 
 ## Roadmap
 
-**Monitoring**, and it is a piece of work rather than a service to add. What the
-fleet needs is a way to know it is alright: status checks on the units that matter,
-resource and disk trend over time, and alerting that reaches somebody when a check
-fails — including when the board that would have sent the alert is the one that is
-down. Beszel is part of the answer, but mainly as the status check; the alerting
-path, what is checked, and where a failure lands are the design, and dropping an
-agent into the catalog decides none of it. One structural gap belongs to the same
-work: multi-host is modelled throughout — one stack per host, a profile per
-board's RAM, a service list per host — but exercised by one host, which is the
-classic way a second one turns out to be a rewrite.
+**Monitoring that outlives the board it watches.** The image already polls: every
+five minutes `keel-alert.service` lists the units that are failed or stuck
+restarting, posts each new one once with its journal tail, and posts again when it
+recovers — to whatever entry in your catalog claims the `alerts` role, and nowhere
+at all if none does. What a poller on the board cannot do is notice that the board
+is gone, so a check that runs somewhere else is the missing half, along with
+resource and disk trend over time. One structural gap belongs to the same work:
+multi-host is modelled throughout — one stack per host, a profile per board's RAM,
+a service list per host — but exercised by one host, which is the classic way a
+second one turns out to be a rewrite.
 
 **OIDC client registration.** Registering `oauth2-proxy` with Kanidm is manual
 today, which makes the login the one part of a fresh install that a `pulumi up`
@@ -850,12 +862,6 @@ in the vault where the gate's entry already reads it. What it needs of the
 identity role — the provider's REST root, the administrative account and the vault
 field holding its password, named and never valued — it states on `IdentityRole`
 when it lands, so the role carries what has a reader and nothing ahead of one.
-
-**Cloudflare DNS records.** Every vhost's name is created by hand. A record is
-derived from an entry that already declares `subdomain` and `publicDns`, so this
-is a provider and a resource rather than a decision. It has to land in the same
-change that removes `cloudflare_dns` from the old repo's `DEPLOY`: that repo's
-orphan reaper deletes any LAN-pointing A record it does not know about.
 
 **An installation object whose halves are optional.** `Installation` no longer
 grows with the catalog — a field there is what the fleet or several services need,

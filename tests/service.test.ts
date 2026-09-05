@@ -32,7 +32,7 @@ import {
   renderNetworks,
   renderQuadlet,
 } from "../src/render/quadlet";
-import { routerMiddlewares } from "./routeYaml";
+import { routersOf } from "./routeYaml";
 
 const NETWORK = INSTALLATION.network;
 
@@ -195,11 +195,14 @@ describe("traefik routes", () => {
     // The allowlist proves from where and the gate proves who; `open` means keel
     // adds no gate, not that the vhost answers anyone. The router names the
     // chain, never the forward-auth gate on its own: the bare gate answers 401
-    // and the browser never reaches a login page.
-    const middlewares = routerMiddlewares(rendered ?? "");
-    expect(middlewares[0]).toBe("internal-only");
-    expect(middlewares.includes(`oauth2-chain-${spec.name}`)).toBe(spec.auth === "edge");
-    expect(middlewares).not.toContain("sso-auth");
+    // and the browser never reaches a login page. Every router on the vhost,
+    // because an entry that divides its paths between upstreams carries the same
+    // two on each of them — reachability is the vhost's property, not a name's.
+    for (const [router, { middlewares }] of Object.entries(routersOf(rendered ?? ""))) {
+      expect(middlewares[0], router).toBe("internal-only");
+      expect(middlewares.includes(`oauth2-chain-${spec.name}`), router).toBe(spec.auth === "edge");
+      expect(middlewares, router).not.toContain("sso-auth");
+    }
     // A named public host is the one thing that drops the allowlist.
     expect(route(spec, [subdomainOf(spec)!])).not.toContain("internal-only");
   });
