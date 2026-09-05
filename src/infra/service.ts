@@ -30,7 +30,6 @@ import {
   metricsAccountEmail,
   metricsSecretsPath,
   secretsPath,
-  serviceOrigin,
   type ServiceSpec,
 } from "../config/spec";
 import { type ServiceFile } from "../config/types";
@@ -161,8 +160,10 @@ export default class Service extends pulumi.ComponentResource {
     // it needs one and which two variables it reads the login out of, the hub is
     // whichever entry claims the metrics role, and the password is created and
     // sealed inside the resource — so it is in no vault and in no state file.
-    // Ordered behind the same services the container is, because the account is
-    // made by calling the hub and a hub that is not up has nothing to make.
+    // The hub is called from the board over ssh, so this needs the same host and
+    // ssh arguments every other resource here takes. Ordered behind the same
+    // services the container is, because the account is made by calling the hub
+    // and a hub that is not up has nothing to make.
     //
     // A consumer with no hub deployed is one of the gaps refused before any of
     // this is built, so there is no branch here for a declaration with nothing
@@ -174,13 +175,15 @@ export default class Service extends pulumi.ComponentResource {
         : new MetricsAccount(
             `${spec.name}-metrics-account`,
             {
+              host,
+              sshArgs,
               vault: INSTALLATION.vault,
               item: catalog.metrics.spec.vaultItem ?? catalog.metrics.spec.name,
-              // Its own vhost, because that is how this machine reaches the hub:
-              // the deploy runs off the board, where a loopback port is not the
-              // board's. The route admits the LAN and the mesh, which is where a
-              // deploy is run from.
-              hubUrl: serviceOrigin(catalog.metrics.spec, INSTALLATION.network.domain),
+              // Loopback, because the hub is talked to from the board rather
+              // than from here — the same address this service's own
+              // configuration dials it on, and the only one that needs no
+              // opinion about whether a laptop can route to the LAN.
+              hubUrl: `http://127.0.0.1:${catalog.metrics.spec.port}`,
               email: metricsAccountEmail(spec, INSTALLATION.network.domain),
               role: spec.metricsAccount.role,
               api: catalog.metrics.role.api,

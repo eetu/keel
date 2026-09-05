@@ -409,6 +409,19 @@ because a rotation on every refresh would restart the consumer for no change. A
 account's resource is ordered behind the hub's unit, because an account is made
 by calling something that answers.
 
+**And it talks to the hub from the board, not from here.** Each method sends one
+small Python program to the board's `python3` on stdin and reads a JSON line
+back — one ssh session that waits for the hub, authenticates and does the whole
+operation, rather than a session per call — so the address is the hub's
+_loopback_ origin, the same one the consumer's own configuration dials. A
+provider that reached the vhost from the deploy machine works until the machine
+it runs on cannot route to the LAN, which is a property of somebody's laptop and
+not of this fleet: a stray reject route made `net.connect` answer `EHOSTUNREACH`
+where `curl` returned 200, and nothing about the board was wrong. Every secret
+rides in on that stdin, base64 inside the program text — never an argument,
+never a file on the board, never in a diagnostic; `ps` there sees `python3 -`.
+The script prints an id and fails with a sentence and an HTTP status.
+
 **A LAN name is a line in a hosts file the resolver re-reads.** Pi-hole's own
 `setup` derives the record set from `catalog.services` into
 `/var/lib/pihole/hosts/keel.list`, one `<lanAddress> <subdomain>.<domain>` line

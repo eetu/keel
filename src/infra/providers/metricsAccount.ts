@@ -17,6 +17,21 @@
  * a `pulumi up` after the input that governs it moved, and re-creating it after
  * somebody deletes the account in the hub's UI is the next deploy.
  *
+ * **The hub is talked to from the board, over ssh, the way every other provider
+ * here reaches a device.** The hub answers on the board's own loopback, which is
+ * where the consumer reads it too — so there is one address for it rather than a
+ * second one that only the deploy machine uses, and no assumption that a laptop
+ * can route to the LAN at all. Each method sends one small Python program to the
+ * board's `python3` on stdin and reads a JSON line back: one ssh session that
+ * waits for the hub, authenticates, and does the whole operation, rather than a
+ * session per HTTP call.
+ *
+ * **Everything sensitive rides in on that stdin**, base64 inside the program
+ * text: the superuser's two values and the generated password are never an
+ * argument, never a file on the board, and never in an error message. `ps` on
+ * the board sees `python3 -`. The script prints an id and nothing else, and
+ * fails with a short diagnostic that names the operation and an HTTP status.
+ *
  * The shape is `SealedEnv`'s: the plaintext is a local inside the method, never
  * an input, never an output and never captured — a captured secret is
  * serialised into state in plaintext (pulumi/pulumi#8265). What is carried is
@@ -24,8 +39,8 @@
  * the consuming unit's restart trigger folds in.
  *
  * Everything here runs on `create`, `update`, `read` and `delete` — so on `up`
- * and on `refresh`, and **never on a bare preview**: no vault read, no HTTP call
- * to the hub, no account created by a plan nobody applied.
+ * and on `refresh`, and **never on a bare preview**: no vault read, no ssh, no
+ * account created by a plan nobody applied.
  *
  * It names no product. Which paths a hub answers on comes in as the metrics
  * role's `api`, so this is "create an account on the hub" and the dialect
@@ -36,15 +51,18 @@ import * as pulumi from "@pulumi/pulumi";
 
 import { type MetricsApi } from "../../config/spec";
 import { seal } from "../age";
+import { run } from "../ssh";
 import { envLine, readField } from "../vault";
 import { type Args } from "./inputs";
 
 export type MetricsAccountInputs = {
+  /** ssh_config alias of the board the hub runs on — where these calls are made from. */
+  host: string;
   /** The 1Password vault the hub's item lives in. */
   vault: string;
   /** The hub's own item, holding the superuser login this authenticates as. */
   item: string;
-  /** The hub's origin, as this machine reaches it — its vhost, through the proxy. */
+  /** The hub's loopback origin, which is where the board reaches it. */
   hubUrl: string;
   /** The address the account is created under. Derived from the consumer's name. */
   email: string;
@@ -61,6 +79,7 @@ export type MetricsAccountInputs = {
    * lets you encrypt *to* the host.
    */
   ageRecipient: string;
+  sshArgs?: readonly string[];
 };
 
 type Outs = MetricsAccountInputs & {
@@ -72,80 +91,151 @@ type Outs = MetricsAccountInputs & {
   userId: string;
 };
 
-/** A record in the hub's account collection, as much of one as this reads. */
-type HubUser = { id: string };
-/** A monitored machine, and whichever accounts already see it. */
-type HubSystem = { id: string; users?: readonly string[] };
-type HubList<T> = { items: readonly T[] };
-
 /**
- * How long to wait for the hub to answer before giving up: it is reached through
- * the proxy over its own vhost, and a route written seconds ago may not be live
- * yet even though the container's start job has returned.
+ * How long the board waits for the hub before giving up. The wait is inside the
+ * remote program, so thirty attempts are one ssh session rather than thirty.
  */
 const HEALTH_ATTEMPTS = 30;
-const HEALTH_PAUSE_MS = 2000;
+const HEALTH_PAUSE_SECONDS = 2;
 
 /**
- * One call to the hub. The token rides as `Authorization` bare, which is what
- * PocketBase issues and expects.
+ * What every remote program starts with: the payload, one request helper, the
+ * wait for the hub and the superuser login.
  *
- * Failures name the method and the path and the status, and nothing else: a
- * response body can quote back what was sent, and what is sent here is a
- * password.
+ * Written flush against the left margin and joined line by line rather than
+ * interpolated into an indented template, which is the trap `selftest.ts`
+ * documents — an indented block would give its first line a different
+ * indentation from the rest, and in Python that is a syntax error rather than an
+ * ugly file.
  */
-async function hub<T>(
-  base: string,
-  path: string,
-  init: { method?: string; token?: string; body?: unknown } = {},
-): Promise<T> {
-  const response = await fetch(`${base}${path}`, {
-    method: init.method ?? "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.token === undefined ? {} : { Authorization: init.token }),
-    },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `the metrics hub answered ${response.status} to ${init.method ?? "GET"} ${path}`,
-    );
-  }
-  return (await response.json()) as T;
-}
+const PREAMBLE = `
+import base64
+import json
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
-/** Waits for the hub to be serving, so "no account there" cannot mean "not up yet". */
-async function awaitHub(base: string, health: string): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await hub(base, health);
-      return;
-    } catch (error) {
-      if (attempt >= HEALTH_ATTEMPTS) {
-        throw new Error(
-          `the metrics hub at ${base} is not answering ${health} after ` +
-            `${(HEALTH_ATTEMPTS * HEALTH_PAUSE_MS) / 1000}s`,
-          { cause: error },
-        );
-      }
-      await new Promise((wake) => setTimeout(wake, HEALTH_PAUSE_MS));
-    }
-  }
-}
+P = json.loads(base64.b64decode(PAYLOAD).decode("utf-8"))
+
+
+def fail(what):
+    # Short, and never the payload: this reaches a deploy's output.
+    sys.stderr.write(what + "\\n")
+    raise SystemExit(1)
+
+
+def call(path, method="GET", body=None, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = token
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(P["hub"] + path, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=30) as answer:
+        raw = answer.read()
+    return json.loads(raw) if raw else {}
+
+
+def serving():
+    # The hub's start job means healthy, but a deploy can reach this the moment
+    # the container came up — so wait rather than conclude the account is absent.
+    seen = "no answer"
+    for attempt in range(P["attempts"]):
+        if attempt:
+            time.sleep(P["pause"])
+        try:
+            call(P["api"]["health"])
+            return
+        except Exception as error:
+            seen = type(error).__name__
+    fail("not answering %s after %ds (%s)" % (P["api"]["health"], P["attempts"] * P["pause"], seen))
+
+
+def token():
+    # The hub keeps its superusers in a collection of their own, so an account
+    # created here under that same address would be a second thing wearing the
+    # bootstrap login's name.
+    if P["email"] == P["identity"]:
+        fail("the account's address is the hub's own superuser login")
+    try:
+        return call(P["api"]["superuserAuth"], "POST", {"identity": P["identity"], "password": P["secret"]})["token"]
+    except urllib.error.HTTPError as error:
+        fail("superuser login refused: HTTP %d" % error.code)
+
+
+def find(auth):
+    where = urllib.parse.quote('email="%s"' % P["email"])
+    found = call("%s?filter=%s" % (P["api"]["users"], where), token=auth)["items"]
+    return found[0]["id"] if found else None
+`;
 
 /**
- * The superuser's token, and the address it belongs to.
+ * Create or update the account, then assign it to every machine the hub knows.
  *
- * The password is read from the vault, spent on one request and dropped. The
- * identity comes back with the token because the account being created must not
- * be the bootstrap superuser's own: on the hub they are two collections, and an
- * account created here that shared that address would be a second thing named
- * after the first.
+ * Assigning to everything is what makes this an account of the *hub* rather than
+ * of a list somebody maintains: a board added to the fleet tomorrow is visible
+ * to the page at the next deploy, and there is nothing to add it to by hand.
  */
-async function authenticate(
+const PROVISION = `
+serving()
+auth = token()
+uid = find(auth)
+account = {
+    "password": P["password"],
+    "passwordConfirm": P["password"],
+    # The hub mails a confirmation to an address nobody reads, and an unverified
+    # account cannot log in at all.
+    "verified": True,
+    "role": P["role"],
+}
+try:
+    if uid is None:
+        account.update({"email": P["email"], "emailVisibility": False})
+        uid = call(P["api"]["users"], "POST", account, auth)["id"]
+    else:
+        call("%s/%s" % (P["api"]["users"], uid), "PATCH", account, auth)
+except urllib.error.HTTPError as error:
+    fail("could not write the account: HTTP %d" % error.code)
+try:
+    for machine in call("%s?perPage=200" % P["api"]["systems"], token=auth)["items"]:
+        seen = machine.get("users") or []
+        if uid in seen:
+            continue
+        call("%s/%s" % (P["api"]["systems"], machine["id"]), "PATCH", {"users": seen + [uid]}, auth)
+except urllib.error.HTTPError as error:
+    fail("could not assign the account to a system: HTTP %d" % error.code)
+sys.stdout.write(json.dumps({"id": uid}))
+`;
+
+/** Whether the account is still there, which is the whole of this resource's `read`. */
+const LOOKUP = `
+serving()
+sys.stdout.write(json.dumps({"id": find(token())}))
+`;
+
+/** Remove it. Already gone is the state this was asking for. */
+const REMOVE = `
+serving()
+auth = token()
+try:
+    call("%s/%s" % (P["api"]["users"], P["userId"]), "DELETE", None, auth)
+except urllib.error.HTTPError as error:
+    if error.code != 404:
+        fail("could not delete the account: HTTP %d" % error.code)
+sys.stdout.write(json.dumps({}))
+`;
+
+/**
+ * The superuser's login, read from the vault for the length of one call.
+ *
+ * Loudly on an empty field, for the reason `readEnvFile` is: `readField` answers
+ * "" for a missing field *and* for an unreachable vault, and a login sent blank
+ * is a hub that refuses it for a reason nobody could guess from here.
+ */
+async function credentials(
   props: MetricsAccountInputs,
-): Promise<{ token: string; identity: string }> {
+): Promise<{ identity: string; secret: string }> {
   const read = async (field: string): Promise<string> => {
     const value = await readField(props.vault, props.item, field);
     if (value === "") {
@@ -153,21 +243,59 @@ async function authenticate(
     }
     return value;
   };
-  const identity = await read(props.superuser.user);
-  const auth = await hub<{ token: string }>(props.hubUrl, props.api.superuserAuth, {
-    method: "POST",
-    body: { identity, password: await read(props.superuser.password) },
-  });
-  return { token: auth.token, identity };
+  return {
+    identity: await read(props.superuser.user),
+    secret: await read(props.superuser.password),
+  };
 }
 
-/** The account with this address, or undefined — the hub filters, this does not. */
-async function findUser(props: MetricsAccountInputs, token: string): Promise<HubUser | undefined> {
-  const filter = encodeURIComponent(`email="${props.email}"`);
-  const found = await hub<HubList<HubUser>>(props.hubUrl, `${props.api.users}?filter=${filter}`, {
-    token,
-  });
-  return found.items[0];
+/**
+ * One operation on the hub: the program and everything it needs, on the board's
+ * stdin, and a JSON answer back.
+ *
+ * The payload is base64 inside the source rather than a second thing on stdin,
+ * because `python3 -` reads its program to EOF and there would be nothing left
+ * for the program to read. Encoding it also means no value from the vault is
+ * ever spliced into Python source as a literal.
+ */
+async function speak<T>(
+  props: MetricsAccountInputs,
+  operation: string,
+  body: string,
+  extra: Record<string, unknown> = {},
+): Promise<T> {
+  const { Buffer } = await import("node:buffer");
+  const superuser = await credentials(props);
+  const payload = Buffer.from(
+    JSON.stringify({
+      hub: props.hubUrl,
+      api: props.api,
+      email: props.email,
+      role: props.role,
+      identity: superuser.identity,
+      secret: superuser.secret,
+      attempts: HEALTH_ATTEMPTS,
+      pause: HEALTH_PAUSE_SECONDS,
+      ...extra,
+    }),
+    "utf8",
+  ).toString("base64");
+
+  const result = await run(
+    props.host,
+    ["python3", "-"],
+    [`PAYLOAD = "${payload}"`, PREAMBLE, body].join("\n"),
+    props.sshArgs,
+  );
+  if (result.status !== 0) {
+    // The script's own diagnostic, which is a sentence and a status code. Never
+    // its stdout: an answer this could not parse is not something to quote.
+    throw new Error(
+      `the metrics hub at ${props.hubUrl} could not ${operation}: ` +
+        `${result.stderr.trim() || "(no output)"}`,
+    );
+  }
+  return JSON.parse(result.stdout) as T;
 }
 
 /**
@@ -183,63 +311,12 @@ async function generate(): Promise<string> {
   return randomBytes(32).toString("base64url");
 }
 
-/**
- * Creates or updates the account and assigns it to every machine the hub knows,
- * then seals the login for the host.
- *
- * Assigning to everything is what makes this an account of the *hub* rather than
- * of a list somebody maintains: a board added to the fleet tomorrow is visible
- * to the page at the next deploy, and there is nothing to add it to by hand.
- */
+/** The account, and the login for it sealed for the board that will read it. */
 async function provision(inputs: MetricsAccountInputs): Promise<{ id: string; outs: Outs }> {
-  await awaitHub(inputs.hubUrl, inputs.api.health);
-  const { token, identity } = await authenticate(inputs);
-  if (inputs.email === identity) {
-    throw new Error(
-      `${inputs.email} is the hub's own superuser address — an account created here would be ` +
-        "a second account wearing the bootstrap login's name",
-    );
-  }
-
   const password = await generate();
-  const existing = await findUser(inputs, token);
-  const account =
-    existing === undefined
-      ? await hub<HubUser>(inputs.hubUrl, inputs.api.users, {
-          method: "POST",
-          token,
-          body: {
-            email: inputs.email,
-            password,
-            passwordConfirm: password,
-            // The hub sends a confirmation mail to an address nobody reads, and
-            // an unverified account cannot log in at all.
-            verified: true,
-            role: inputs.role,
-            emailVisibility: false,
-          },
-        })
-      : await hub<HubUser>(inputs.hubUrl, `${inputs.api.users}/${existing.id}`, {
-          method: "PATCH",
-          token,
-          body: { password, passwordConfirm: password, verified: true, role: inputs.role },
-        });
-
-  const systems = await hub<HubList<HubSystem>>(
-    inputs.hubUrl,
-    `${inputs.api.systems}?perPage=200`,
-    { token },
-  );
-  for (const system of systems.items) {
-    const seen = system.users ?? [];
-    if (seen.includes(account.id)) continue;
-    await hub(inputs.hubUrl, `${inputs.api.systems}/${system.id}`, {
-      method: "PATCH",
-      token,
-      body: { users: [...seen, account.id] },
-    });
-  }
-
+  const account = await speak<{ id: string }>(inputs, "create the account", PROVISION, {
+    password,
+  });
   // The body the container reads, in the variable names the application spells
   // — and the last place the password exists unsealed.
   const sealed = await seal(
@@ -260,12 +337,10 @@ const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
     // some hub, and which hub, which vault and which variables it was sealed
     // into are not in it.
     if (!props) return { id: undefined };
-    await awaitHub(props.hubUrl, props.api.health);
-    const { token } = await authenticate(props);
-    const found = await findUser(props, token);
+    const found = await speak<{ id: string | null }>(props, "look the account up", LOOKUP);
     // Deleted in the hub's UI is deleted here too, and the next `up` creates it
     // again with a fresh password.
-    if (found === undefined) return { id: undefined };
+    if (found.id === null) return { id: undefined };
     // Everything else is carried through untouched. The password cannot be read
     // back — the hub stores a hash of it, and this holds only ciphertext — and
     // generating a new one on every refresh would rewrite the blob and restart
@@ -314,7 +389,8 @@ const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
     // exists, and a deliberate one: an update generates a fresh password and
     // re-seals it, which restarts the service that reads it. The vault's
     // contents are not inputs, and the hub's own paths moving is not a reason to
-    // change anybody's password.
+    // change anybody's password. Neither is the board being reached differently:
+    // `host` and `sshArgs` are how this gets there, not what it does.
     return {
       changes:
         olds.role !== news.role ||
@@ -332,17 +408,7 @@ const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
   },
 
   async delete(_id, props) {
-    await awaitHub(props.hubUrl, props.api.health);
-    const { token } = await authenticate(props);
-    const response = await fetch(`${props.hubUrl}${props.api.users}/${props.userId}`, {
-      method: "DELETE",
-      headers: { Authorization: token },
-    });
-    // Already gone is the state this was asking for.
-    if (response.status === 404) return;
-    if (!response.ok) {
-      throw new Error(`the metrics hub answered ${response.status} to DELETE ${props.api.users}`);
-    }
+    await speak(props, "delete the account", REMOVE, { userId: props.userId });
   },
 };
 
