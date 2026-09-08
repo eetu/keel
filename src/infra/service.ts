@@ -37,7 +37,7 @@ import {
 } from "../config/spec";
 import { type ServiceFile, type ServiceSecretFile } from "../config/types";
 import { memoryDropInPath, serviceDropIn } from "../render/memory";
-import { quadletPath, renderQuadlet } from "../render/quadlet";
+import { quadletPath, renderQuadlet, renderTimer, timerPath } from "../render/quadlet";
 import { MetricsAccount } from "./providers/metricsAccount";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedText } from "./providers/sealedText";
@@ -113,6 +113,11 @@ const sha256 = (text: string): string => createHash("sha256").update(text).diges
 export default class Service extends pulumi.ComponentResource {
   /** `/var/lib/<name>`, when the service has state worth restoring. */
   public readonly backupPath: string | undefined;
+  /**
+   * The unit that carries this entry's runtime state: its own `.service` where
+   * the entry stays up, its `.timer` where the entry runs on a clock — because
+   * for a scheduled entry the clock is the thing that is either running or not.
+   */
   public readonly unit: SystemdUnit;
 
   constructor(args: ServiceArgs, opts?: pulumi.ComponentResourceOptions) {
@@ -157,6 +162,20 @@ export default class Service extends pulumi.ComponentResource {
       { host, sshArgs, path: memoryDropInPath(spec.name), content: memory, mode: "644" },
       parent,
     );
+
+    // The clock, for an entry that runs to completion on one. A plain unit file
+    // beside the quadlet rather than anything quadlet generates: quadlet knows
+    // container units and nothing about timers, and a timer named after the entry
+    // activates the unit quadlet generates for it without either half saying so.
+    const timer = spec.schedule === undefined ? undefined : renderTimer(spec);
+    const timerFile =
+      timer === undefined
+        ? undefined
+        : new RemoteFile(
+            `${spec.name}-timer`,
+            { host, sshArgs, path: timerPath(spec), content: timer, mode: "644" },
+            parent,
+          );
 
     const secrets = secretsPath(spec);
     const secretFile =
@@ -339,6 +358,7 @@ export default class Service extends pulumi.ComponentResource {
       ...(routeFile ? [routeFile] : []),
       ...(secretFile ? [secretFile] : []),
       ...(metricsFile ? [metricsFile] : []),
+      ...(timerFile ? [timerFile] : []),
       ...generated.map((entry) => entry.file),
     ];
     // Empty for a service with no generated file, which is every service but
@@ -350,35 +370,64 @@ export default class Service extends pulumi.ComponentResource {
         : pulumi
             .all(generated.map((entry) => entry.plaintextHash))
             .apply((hashes) => hashes.join(""));
+    const trigger = pulumi
+      .all([quadlet, sealedEnv?.plaintextHash ?? "", account?.plaintextHash ?? "", generatedHash])
+      .apply(([body, secretHash, accountHash, fileHash]) =>
+        // Each part hashed before it is joined: fixed-length pieces cannot run
+        // together, so a boundary shifting between two of them is a change.
+        // Every credential joins the secret's own part rather than becoming
+        // another one — a new part would change every trigger in the fleet,
+        // restarting the resolver, the proxy and the identity provider for a
+        // value none of them has. The timer's body is a part only where there is
+        // one, for the same reason.
+        sha256(
+          [
+            body,
+            memory,
+            ...(timer === undefined ? [] : [timer]),
+            ...restarting,
+            secretHash + accountHash + fileHash,
+          ]
+            .map(sha256)
+            .join(""),
+        ),
+      );
+
+    // An entry that stays up is one unit, started because this resource exists.
+    //
+    // A scheduled entry is two, and the split is what keeps a deploy from being a
+    // reason to run the job. The one-shot is `action: "load"`: the deploy makes
+    // the manager see it — which for a quadlet means the `daemon-reload` that
+    // generates it — and never starts it, so its inactivity is its steady state
+    // rather than drift, and retiring the entry stops whatever is mid-run. The
+    // timer is the unit with runtime state: enabling it starts the clock, and
+    // deleting it stops it. Ordered behind the one-shot, so the clock is never
+    // started against a unit the manager has not generated yet, and a retirement
+    // stops the clock before it stops the job.
+    // `spec.name` names whichever of the two carries runtime state, the same as
+    // it does for an entry that stays up and the same as the backup's timers do,
+    // so nothing about an existing service's state identity moves.
+    const oneShot =
+      spec.schedule === undefined
+        ? undefined
+        : new SystemdUnit(
+            `${spec.name}-oneshot`,
+            {
+              host,
+              sshArgs,
+              unit: `${spec.name}.service`,
+              quadlet: true,
+              action: "load",
+              trigger,
+            },
+            { ...parent, dependsOn: deps },
+          );
     this.unit = new SystemdUnit(
       spec.name,
-      {
-        host,
-        sshArgs,
-        unit: `${spec.name}.service`,
-        quadlet: true,
-        trigger: pulumi
-          .all([
-            quadlet,
-            sealedEnv?.plaintextHash ?? "",
-            account?.plaintextHash ?? "",
-            generatedHash,
-          ])
-          .apply(([body, secretHash, accountHash, fileHash]) =>
-            // Each part hashed before it is joined: fixed-length pieces cannot
-            // run together, so a boundary shifting between two of them is a
-            // change. Every credential joins the secret's own part rather than
-            // becoming another one — a new part would change every trigger in
-            // the fleet, restarting the resolver, the proxy and the identity
-            // provider for a value none of them has.
-            sha256(
-              [body, memory, ...restarting, secretHash + accountHash + fileHash]
-                .map(sha256)
-                .join(""),
-            ),
-          ),
-      },
-      { ...parent, dependsOn: deps },
+      oneShot === undefined
+        ? { host, sshArgs, unit: `${spec.name}.service`, quadlet: true, trigger }
+        : { host, sshArgs, unit: `${spec.name}.timer`, quadlet: false, trigger },
+      { ...parent, dependsOn: oneShot === undefined ? deps : [...deps, oneShot] },
     );
 
     // The same function the backup's own path list is derived from, so the two

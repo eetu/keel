@@ -97,6 +97,18 @@ export function renderNetworks(): Tree {
  * reboot after it would race, the client crash-looping through `Restart=always`
  * until the issuer answered. Left empty this is exactly `spec.dependsOn`, which
  * is what a renderer with no deployment in hand can honestly say.
+ *
+ * A `schedule` on the entry makes the unit a one-shot, and `Type=oneshot` is the
+ * whole mechanism rather than a label. Quadlet's default for a `.container` is
+ * `Type=notify` with `--sdnotify=conmon -d` on the generated `ExecStart`, which
+ * detaches: `podman run` returns 0 the moment the container is up, and the
+ * container's own exit status reaches systemd nowhere. Stating `Type=oneshot`
+ * makes quadlet drop the `-d`, the `--sdnotify` and the `NotifyAccess`, so
+ * `podman run` waits in the foreground and hands its exit code on — a job that
+ * worked leaves the unit inactive, and a job that failed leaves it *failed*,
+ * which is the state the image's poller lists. `RemainAfterExit=` is deliberately
+ * absent: the `yes` a one-shot would otherwise want leaves the unit "started",
+ * and a timer's next activation is refused against a unit in that state.
  */
 export function renderQuadlet(
   spec: ServiceSpec,
@@ -104,6 +116,7 @@ export function renderQuadlet(
   roles: Roles = {},
 ): string {
   const egress = spec.egress ?? "internal";
+  const scheduled = spec.schedule !== undefined;
   // Both env files are derived from the entry rather than passed in, which is
   // what keeps this a pure function of a spec: what a deploy writes and what a
   // golden pins cannot differ, because there is one reading of the declaration.
@@ -169,7 +182,10 @@ export function renderQuadlet(
       ? ["Network=host"]
       : [
           `Network=${NETWORK_NAMES[egress]}.network`,
-          `PublishPort=127.0.0.1:${spec.port}:${spec.port}`,
+          // Nothing to publish for a job that runs to completion: its port is
+          // nominal, no process ever binds it, and a forward into a namespace
+          // that exists for a few seconds a day is a rule with nothing behind it.
+          ...(scheduled ? [] : [`PublishPort=127.0.0.1:${spec.port}:${spec.port}`]),
         ]),
     ...(spec.mounts ?? []).map((mount) => `Volume=${mount}`),
     // systemd splits an unquoted Environment= value on whitespace, so a value
@@ -186,7 +202,11 @@ export function renderQuadlet(
     // them and they rotate for different reasons; podman reads both.
     ...envFiles.map((path) => `EnvironmentFile=${path}`),
     ...(spec.cmd ? [`Exec=${spec.cmd}`] : []),
-    ...(spec.healthCmd
+    // A scheduled entry has nothing to be healthy: `deploymentGaps` refuses the
+    // combination by name, and this is what keeps the rendered unit coherent
+    // rather than one systemd would fail outright for asking a `Type=oneshot`
+    // container to notify readiness.
+    ...(spec.healthCmd && !scheduled
       ? [
           `HealthCmd=${spec.healthCmd}`,
           // Tighter than podman's 30s default, because this interval is also how
@@ -206,33 +226,119 @@ export function renderQuadlet(
   const ownData = `/var/lib/${spec.name}`;
   const makesOwnDir = (spec.mounts ?? []).some((mount) => mount.split(":")[0] === ownData);
 
+  // The directory the captured output lands in. systemd creates the file and not
+  // the path to it, so a `file:` sink under a directory nothing else makes is a
+  // unit that fails before the job runs. Skipped where the entry's own data
+  // directory is already that path: two `mkdir -p` of one directory is a line
+  // that does nothing.
+  const outputDir = spec.stdoutFile?.replace(/\/[^/]+$/, "");
+  const makesOutputDir = outputDir !== undefined && outputDir !== "" && outputDir !== ownData;
+
   // `TimeoutStartSec=600` on every unit, because a first start pulls the image
   // inside `ExecStart` and systemd's default 90 seconds is shorter than a pull
   // over a home uplink onto a Pi: the pull is killed mid-download, the unit fails,
   // and `Restart=always` retries into a half-warm cache until it happens to fit.
   // With a health check the same wait also covers the first-run work a service
-  // does before it answers — Pi-hole builds its blocklists.
-  return dedent(`
-    [Unit]
-    Description=${spec.description}
-    After=${after.join(" ")}
-    Wants=${["network-online.target", ...wants].join(" ")}
+  // does before it answers — Pi-hole builds its blocklists. On a one-shot it
+  // bounds the whole run rather than just the pull, and it is the only thing
+  // that does: systemd's start timeout for `Type=oneshot` defaults to infinity,
+  // so a job wedged on an upstream that never answers would still be running
+  // when its timer next fired.
+  const service = [
+    ...(makesOwnDir ? [`ExecStartPre=/usr/bin/mkdir -p ${ownData}`] : []),
+    ...(makesOutputDir ? [`ExecStartPre=/usr/bin/mkdir -p ${outputDir}`] : []),
+    `Slice=keel-${spec.memory.tier}.slice`,
+    // A restart policy is a statement that this unit should be running. For a
+    // job that runs to completion the opposite is true: exiting is what it is
+    // for, and `Restart=always` would turn every finished run into the next one.
+    ...(scheduled ? ["Type=oneshot"] : ["Restart=always", "RestartSec=10"]),
+    // The job's result as a file something else mounts. `StandardError=journal`
+    // is not a preference: systemd's default for it is to duplicate
+    // `StandardOutput=`, so without the line the run's own logging would be
+    // interleaved into the document and every reader would have to parse around
+    // it.
+    ...(spec.stdoutFile === undefined
+      ? []
+      : [`StandardOutput=file:${spec.stdoutFile}`, "StandardError=journal"]),
+    "TimeoutStartSec=600",
+  ];
 
-    [Container]
-    ${container.join("\n    ")}
-
-    [Service]
-    ${makesOwnDir ? `ExecStartPre=/usr/bin/mkdir -p ${ownData}\n    ` : ""}Slice=keel-${spec.memory.tier}.slice
-    Restart=always
-    RestartSec=10
-    TimeoutStartSec=600
-
-    [Install]
-    WantedBy=multi-user.target
-  `);
+  return [
+    "[Unit]",
+    `Description=${spec.description}`,
+    `After=${after.join(" ")}`,
+    `Wants=${["network-online.target", ...wants].join(" ")}`,
+    "",
+    "[Container]",
+    ...container,
+    "",
+    "[Service]",
+    ...service,
+    // No `[Install]` for a scheduled entry, and that is the difference between a
+    // schedule and a boot: `WantedBy=multi-user.target` is what makes the
+    // generator want this unit at every startup, which for a one-shot is a run
+    // on every reboot. What starts it is the timer beside it and nothing else.
+    ...(scheduled ? [] : ["", "[Install]", "WantedBy=multi-user.target"]),
+    "",
+  ].join("\n");
 }
 
 /** Where the quadlet lands. `/etc` because Pulumi owns it, not the image. */
 export function quadletPath(spec: ServiceSpec): string {
   return `/etc/containers/systemd/${spec.name}.container`;
+}
+
+/**
+ * How far a scheduled run may be spread past its calendar minute.
+ *
+ * A job on a round schedule reaches whatever it fetches at the same instant as
+ * every other consumer of the same round schedule, and a few minutes of drift
+ * costs a run on a clock precisely nothing.
+ */
+const SCHEDULE_JITTER = "5m";
+
+/**
+ * Where a scheduled entry's timer lands. `/etc/systemd/system`, beside every
+ * other unit the deploy owns — and not a quadlet directory, because quadlet
+ * generates container units and knows nothing about timers.
+ */
+export function timerPath(spec: ServiceSpec): string {
+  return `/etc/systemd/system/${spec.name}.timer`;
+}
+
+/**
+ * The timer that runs a scheduled entry's one-shot.
+ *
+ * No `Unit=` line: a timer called `<name>.timer` activates `<name>.service` by
+ * default, which is exactly the unit quadlet generates from `<name>.container` —
+ * so the two halves cannot end up naming different things.
+ */
+export function renderTimer(spec: ServiceSpec): string {
+  if (spec.schedule === undefined) {
+    throw new Error(`${spec.name} has no schedule to build a timer from`);
+  }
+  return dedent(`
+    [Unit]
+    Description=${spec.description}, scheduled
+    # A board with no real-time clock boots believing it is the moment the image
+    # was built and is stepped forward by weeks once NTP answers. A persistent
+    # timer loaded before the step discards its stamp as "in the future" and then
+    # treats every calendar elapse inside the jump as missed — a run on every
+    # boot. The image holds time-sync.target until chrony reports the clock
+    # synchronised (chrony-wait, 180 s at most), and this line is what makes the
+    # timer wait for it.
+    After=time-sync.target
+
+    [Timer]
+    OnCalendar=${spec.schedule}
+    RandomizedDelaySec=${SCHEDULE_JITTER}
+    # A board that was off at the scheduled minute runs the window it missed at
+    # the next boot rather than waiting for the schedule to come round again. One
+    # run and not a storm of them: the stamp says which window was missed, not
+    # how many elapsed while the machine was off.
+    Persistent=true
+
+    [Install]
+    WantedBy=timers.target
+  `);
 }
