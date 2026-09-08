@@ -10,12 +10,15 @@
  * quadlet body, the memory drop-in, the secret blob). It replaces the stamp files
  * under `/etc/systemd/system/.*-stamp` and the shell that compared them.
  *
- * Two kinds of unit end up here, and `action` is the difference. A service unit
+ * Three kinds of unit end up here, and `action` is the difference. A service unit
  * is Pulumi's: it is started because this resource exists and stopped when it
  * stops existing. `nftables.service` is the image's: Pulumi only hands it new
  * files and asks it to re-read them, so `action: "reload"` reloads on a change
  * and leaves the unit alone on delete — disabling the packet filter is not a
- * thing a deploy should be able to do.
+ * thing a deploy should be able to do. And a timer-triggered one-shot is Pulumi's
+ * too, but its steady state is *inactive*: `action: "load"` makes the manager see
+ * it and never starts it, because a deploy is not a reason to run a job and a
+ * finished run is not drift.
  */
 
 import * as pulumi from "@pulumi/pulumi";
@@ -36,10 +39,13 @@ export type SystemdUnitInputs = {
   quadlet: boolean;
   trigger: string;
   /**
-   * `restart` (the default) for a unit this resource owns. `reload` for one the
-   * image owns and Pulumi only reconfigures.
+   * `restart` (the default) for a unit this resource owns and that is meant to be
+   * running. `reload` for one the image owns and Pulumi only reconfigures.
+   * `load` for one this resource owns whose steady state is inactive — a
+   * timer-triggered one-shot, where being loaded is the whole of what a deploy
+   * has to make true.
    */
-  action?: "restart" | "reload";
+  action?: "restart" | "reload" | "load";
   /** Extra ssh arguments — an alternate config file, a jump host, a port. */
   sshArgs?: readonly string[];
 };
@@ -63,6 +69,11 @@ const apply = async (inputs: SystemdUnitInputs, restarting: boolean): Promise<vo
     return;
   }
   await daemonReload(inputs);
+  // A unit whose steady state is inactive is in its declared state as soon as the
+  // manager knows about it. Starting it here would run the job — on the deploy
+  // that wrote it and again on every one that touched its trigger — and the whole
+  // point of a schedule is that the clock decides.
+  if (inputs.action === "load") return;
   const argv = restarting
     ? ["systemctl", "restart", inputs.unit]
     : inputs.quadlet
@@ -129,7 +140,13 @@ const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
     // A unit that is not running is a change, not a steady state. `olds` carries
     // the last read of the machine, so this is what turns a service that died
     // into work for `up` to do rather than drift the plan ignores.
-    const stopped = olds.active !== undefined && olds.active !== "active";
+    //
+    // Except where inactive IS the steady state. A timer-triggered one-shot is
+    // inactive between runs and inactive is what a run that worked leaves behind,
+    // so this rule applied to one would make every refresh report drift and every
+    // `up` run the job — a forecast fetched, a scan performed, a POST sent,
+    // because somebody previewed the stack.
+    const stopped = news.action !== "load" && olds.active !== undefined && olds.active !== "active";
     return {
       changes:
         olds.trigger !== news.trigger ||
@@ -154,12 +171,26 @@ const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
     assertSafeUnit(props.unit);
     // Data under /var/lib is deliberately left alone: re-adding the declaration
     // and running `pulumi up` is then a clean rollback.
+    //
+    // A `load` unit takes the quadlet branch and that is what it wants: `stop` on
+    // an inactive one-shot is a no-op, and on one that happens to be mid-run it
+    // is the point — a retired job has no business finishing against a quadlet
+    // file being deleted underneath it.
     const argv = props.quadlet
       ? ["systemctl", "stop", props.unit]
       : ["systemctl", "disable", "--now", props.unit];
     await run(props.host, argv, undefined, props.sshArgs);
   },
 };
+
+/**
+ * The provider itself, so the three decisions that are only visible in what it
+ * runs — a `load` unit is never started, a `load` unit's inactivity is not drift,
+ * and a delete stops whatever is running — are assertions rather than prose. It
+ * is the same object the resource is constructed with; exporting it changes
+ * nothing about how Pulumi serialises it.
+ */
+export const systemdUnitProvider = provider;
 
 export class SystemdUnit extends pulumi.dynamic.Resource {
   declare public readonly active: pulumi.Output<string>;

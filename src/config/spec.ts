@@ -731,6 +731,54 @@ export type ServiceSpec = {
   env?: Record<string, string>;
   cmd?: string;
   /**
+   * A systemd `OnCalendar=` expression, for an entry that runs to completion on a
+   * clock instead of staying up.
+   *
+   * Stating it is the whole of what makes an entry a scheduled one: it is a
+   * `ServiceSpec` and not a kind of its own, so everything already derived from an
+   * entry still is — the digest pin for a rolling tag, the cap and the slice, the
+   * sealed environment, the mounts, the egress, the backup set, the gaps and the
+   * ordering. What it turns off is the four things that only mean something for a
+   * listener: `Restart=`, the health check, the `[Install]` section, and the
+   * published port.
+   *
+   * A failed run reaches a phone without anyone looking, and that follows from the
+   * one-shot rather than from anything added here: a container that exits non-zero
+   * leaves the unit `failed`, which is exactly what `keel-alert.service` lists —
+   * while a run that worked leaves it inactive, which is its success.
+   *
+   * `port` stays required and such an entry states a nominal one. Making it
+   * optional would hand every other reader of it a `number | undefined` for the
+   * sake of the one kind of entry that binds nothing. What the number does not do
+   * is own a host port: nothing listens on it, so the collision rule does not
+   * claim it — reserving a number for a listener that does not exist would report
+   * the first real user of it as a clash.
+   */
+  schedule?: string;
+  /**
+   * Where a scheduled entry's standard output is captured, as an absolute path on
+   * the host. It becomes `StandardOutput=file:` on the unit, and the directory is
+   * created before the run.
+   *
+   * This is the sink a third-party image can always use: a job that prints its
+   * result needs no egress to hand it over, no endpoint to POST to and no
+   * credential to do it with, and whatever wants the result mounts the path
+   * read-only. Stderr is deliberately pinned to the journal beside it —
+   * systemd's default for `StandardError=` is to duplicate `StandardOutput=`, so
+   * without that the run's own logging would be interleaved into the document.
+   *
+   * The honest limit: `file:` truncates at start and appends as the job runs, so
+   * a run that dies midway leaves a partial document where a whole one was, and a
+   * reader has no way to tell the two apart. Output that must never be read
+   * half-written is a job that writes its own temporary file and renames it —
+   * which is the application's business and not a thing a unit can express.
+   *
+   * Only meaningful with a `schedule`: a service that stays up would be writing
+   * into a file truncated at every restart, so `deploymentGaps` refuses the
+   * combination.
+   */
+  stdoutFile?: string;
+  /**
    * A command inside the container that succeeds once the service answers.
    *
    * Setting it holds the start job open until it passes. Without it
@@ -1116,6 +1164,50 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
           "the others leave, so give the rest a match of their own",
       );
     }
+  }
+
+  // A scheduled entry is a job that exits, and both of these are ways of asking
+  // its port a question. Neither fails where anybody would see it: a health check
+  // that cannot pass fails the unit at its start timeout, so the run that worked
+  // is reported as a broken schedule — and a vhost is a route, a hosts-file line
+  // and a status check all pointed at a port nothing binds.
+  const scheduled = catalog.services.filter((spec) => spec.schedule !== undefined);
+  const probed = scheduled.filter((spec) => spec.healthCmd !== undefined);
+  if (probed.length > 0) {
+    errors.push(
+      `these run on a schedule and declare a health check: ${named(probed)} — a check is a ` +
+        "question about a listener and a job that runs to completion has none, so " +
+        "`Notify=healthy` would hold the start job open until it timed out and every " +
+        "successful run would be recorded as a failure",
+    );
+  }
+  const answering = scheduled.filter((spec) => subdomainOf(spec) !== null);
+  if (answering.length > 0) {
+    errors.push(
+      `these run on a schedule and answer a vhost: ${named(answering)} — the route, the LAN ` +
+        "name and the status check would all point at a port nothing binds, so a scheduled " +
+        "entry states `subdomain: null`",
+    );
+  }
+  const capturing = catalog.services.filter(
+    (spec) => spec.stdoutFile !== undefined && spec.schedule === undefined,
+  );
+  if (capturing.length > 0) {
+    errors.push(
+      `these capture their output to a file and run on no schedule: ${named(capturing)} — the ` +
+        "file is truncated at every start, so a service that stays up would leave a reader a " +
+        "document that empties whenever the unit restarts",
+    );
+  }
+  const relative = catalog.services.filter(
+    (spec) => spec.stdoutFile !== undefined && !spec.stdoutFile.startsWith("/"),
+  );
+  if (relative.length > 0) {
+    errors.push(
+      `these capture their output to a path that is not absolute: ${named(relative)} — the path ` +
+        "is the host's and systemd resolves it against the unit's working directory, so a " +
+        "relative one lands somewhere nothing mounts",
+    );
   }
 
   const clients = catalog.services.filter((spec) => spec.auth === "oidc");

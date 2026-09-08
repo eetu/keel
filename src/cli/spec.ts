@@ -35,7 +35,7 @@ import {
 } from "../config/spec";
 import { memoryDropInPath, serviceDropIn } from "../render/memory";
 import { NFT_SERVICES_PATH, renderNftPorts } from "../render/nftPorts";
-import { quadletPath, renderQuadlet } from "../render/quadlet";
+import { quadletPath, renderQuadlet, renderTimer, timerPath } from "../render/quadlet";
 
 const usage = "usage: yarn spec <name> [--profile 1g|4g|8g]";
 
@@ -98,6 +98,7 @@ const route = catalog.proxy?.role.route(spec, {
   gate: catalog.gate,
 });
 const ports = renderNftPorts(spec);
+const timer = spec.schedule === undefined ? null : renderTimer(spec);
 
 const resolved = {
   name: spec.name,
@@ -106,6 +107,10 @@ const resolved = {
   port: spec.port,
   auth: spec.auth,
   egress: spec.egress ?? "internal",
+  // Null for an entry that stays up, which is nearly all of them. Where it is
+  // set, the unit below is a one-shot and the timer beside it is what runs it.
+  schedule: spec.schedule ?? null,
+  stdoutFile: spec.stdoutFile ?? null,
   vhost: subdomain === null ? null : serviceOrigin(spec, domain),
   publicDns: spec.publicDns === true,
   // The whole environment the container is handed, in the order the quadlet
@@ -196,6 +201,7 @@ const resolved = {
     body: secretFileShape(file),
   })),
   quadlet: { path: quadletPath(spec), body: quadlet },
+  timer: timer === null ? null : { path: timerPath(spec), body: timer },
   route:
     route === null || route === undefined
       ? null

@@ -375,6 +375,49 @@ than against a running container. `Notify=healthy` is what turns a check into
 the start job's verdict, and `TimeoutStartSec=600` is what pays for it — a first
 start also builds gravity.
 
+**A job that runs and exits is a service with a schedule.** `schedule` on a
+`ServiceSpec` is an `OnCalendar=` expression, and stating it is the whole of the
+difference — a scheduled entry is not a kind of its own, so everything already
+derived from an entry still is: the digest pin for a rolling tag, the memory cap
+and the slice, `secretEnv` and its sealed blob, the mounts, the egress, the
+backup set, `deploymentGaps` and `orderServices`. What it turns off is the four
+things that only mean something for a listener — `Restart=`, the health check,
+the `[Install]` section and the published port. Each has a reason: a restart
+policy would turn every finished run into the next one; a health check is a
+question about a listener, so `deploymentGaps` refuses the pair by name, as it
+refuses a vhost whose route, hosts-file line and status check would all point at
+a port nothing binds; `WantedBy=multi-user.target` is what makes the generator
+want a unit at every startup, which for a one-shot is a run on every reboot; and
+a port nothing binds owns nothing, so the collision rule does not claim it and
+`PublishPort` is not written. `Type=oneshot` is the mechanism rather than a
+label: quadlet's default for a `.container` is `Type=notify` with
+`--sdnotify=conmon -d` on the generated `ExecStart`, which detaches — `podman
+run` returns 0 the moment the container is up and the container's own exit status
+reaches systemd nowhere. Stating the type makes quadlet drop the `-d`, so **a run
+that failed leaves the unit `failed`** and the image's five-minute poller reports
+it to a phone, while a run that worked leaves it inactive, which is its success.
+`RemainAfterExit=` is deliberately absent, because the `yes` a one-shot would
+otherwise want leaves the unit "started" and a timer's next activation is refused
+against that; `TimeoutStartSec=600` is the only bound on the run, since systemd's
+start timeout for a one-shot defaults to infinity. The timer beside the quadlet
+is what starts it, and it carries `After=time-sync.target` for the same reason
+the backup pair and the update window do — a board with no clock discards a
+persistent timer's stamp as "in the future" and then treats every elapse inside
+NTP's first step as missed. `stdoutFile` captures the job's output as
+`StandardOutput=file:`, which is the sink any third-party image can use: printing
+a result needs no egress, no endpoint and no credential, and whatever wants it
+mounts the path read-only. `StandardError=journal` goes with it, because
+systemd's default is to duplicate `StandardOutput=` and the run's own logging
+would otherwise be interleaved into the document — and the honest limit is that
+`file:` truncates at start, so a run that dies midway leaves a partial document a
+reader cannot tell from a whole one. Output that must never be read half-written
+is a job that writes its own file and renames it. In the deploy the split is two
+resources: the one-shot is `action: "load"`, which makes the manager see the unit
+and never starts it — its inactivity is its steady state rather than drift, so a
+`preview` does not report it and an `up` does not run the job — and the timer is
+the `SystemdUnit` that carries runtime state, enabled behind the one-shot so the
+clock is never started against a unit the manager has not generated.
+
 **A failure reaches a phone without anyone looking.** The image polls: every
 five minutes `keel-alert.service` (`src/render/alert.ts`) lists the units that
 are failed or stuck in `auto-restart`, posts each new one once with its journal

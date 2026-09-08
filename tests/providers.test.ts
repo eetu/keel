@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,7 @@ import { SERVICES } from "../src/config/services";
 import { secretsPath } from "../src/config/spec";
 import { assertWritablePath } from "../src/infra/providers/remoteFile";
 import { assertCiphertext } from "../src/infra/providers/secretFile";
+import { type SystemdUnitInputs, systemdUnitProvider } from "../src/infra/providers/systemdUnit";
 import { assertSafePath, assertSafeUnit, run } from "../src/infra/ssh";
 import { envLine } from "../src/infra/vault";
 
@@ -136,6 +137,104 @@ describe("what a failed ssh means", () => {
   it("hands a remote command's own failure back to the caller", async () => {
     await withFakeSsh("", 1, async () => {
       await expect(run("nowhere", ["test", "-e", "/x"])).resolves.toMatchObject({ status: 1 });
+    });
+  });
+});
+
+describe("a unit whose steady state is inactive", () => {
+  /**
+   * An `ssh` ahead of the real one that answers everything with success and
+   * records what it was handed, so what the provider *runs* is the assertion. A
+   * `load` unit is defined by the command that is absent from that list.
+   */
+  const withRecordingSsh = async (body: (calls: () => readonly string[]) => Promise<void>) => {
+    const dir = mkdtempSync(`${tmpdir()}/keel-ssh-`);
+    const log = `${dir}/calls`;
+    writeFileSync(`${dir}/ssh`, `#!/bin/sh\necho "$@" >> ${log}\nexit 0\n`, { mode: 0o755 });
+    const previous = process.env.PATH;
+    process.env.PATH = `${dir}:${previous}`;
+    try {
+      await body(() => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []));
+    } finally {
+      process.env.PATH = previous;
+    }
+  };
+
+  /** A timer-triggered one-shot, as inputs. Nothing from the catalog. */
+  const job: SystemdUnitInputs = {
+    host: "nowhere",
+    unit: "job.service",
+    quadlet: true,
+    action: "load",
+    trigger: "abc",
+  };
+
+  it("is loaded and never started", async () => {
+    // A deploy is not a reason to run a job. Without this, writing the entry
+    // would fetch the forecast, run the scan or send the POST — and so would
+    // every later `up` that touched the trigger.
+    await withRecordingSsh(async (calls) => {
+      await systemdUnitProvider.create(job);
+      const argv = calls().join("\n");
+      expect(argv).toContain("systemctl daemon-reload");
+      expect(argv).not.toContain("systemctl start");
+      expect(argv).not.toContain("systemctl restart");
+      expect(argv).not.toContain("systemctl enable");
+    });
+  });
+
+  it("is still loaded and not started when its trigger changes", async () => {
+    // The new quadlet body reaches the next run through the manager, which is
+    // what a reload is. Restarting would be running the job to tell it so.
+    await withRecordingSsh(async (calls) => {
+      await systemdUnitProvider.update!(
+        "nowhere:job.service",
+        { ...job, active: "inactive", enabled: "generated" },
+        { ...job, trigger: "def" },
+      );
+      const argv = calls().join("\n");
+      expect(argv).toContain("systemctl daemon-reload");
+      expect(argv).not.toContain("systemctl restart");
+    });
+  });
+
+  it("is read back as existing rather than as gone", async () => {
+    // `read` asks `systemctl cat`, which answers whether the manager knows the
+    // unit — never whether it is running. A read that took inactive for gone
+    // would drop a live resource from state on every refresh and re-create it on
+    // the next `up`, which for a one-shot is a run nobody asked for.
+    await withRecordingSsh(async () => {
+      const found = await systemdUnitProvider.read!("nowhere:job.service", {
+        ...job,
+        active: "inactive",
+        enabled: "generated",
+      });
+      expect(found.id).toBe("nowhere:job.service");
+    });
+  });
+
+  it("does not read a finished run as drift, while a stopped service still is", async () => {
+    const inactive = { ...job, active: "inactive", enabled: "generated" };
+    expect((await systemdUnitProvider.diff!("id", inactive, job)).changes).toBe(false);
+    // The same reading for a unit that is meant to be running: a service that
+    // died is work for `up` to do rather than drift the plan ignores.
+    const service = { ...job, action: undefined };
+    expect(
+      (await systemdUnitProvider.diff!("id", { ...inactive, action: undefined }, service)).changes,
+    ).toBe(true);
+  });
+
+  it("is stopped when the declaration goes away", async () => {
+    // Stopping an inactive one-shot is a no-op, and stopping one that is mid-run
+    // is the point: a retired job has no business finishing against a quadlet
+    // file being deleted underneath it.
+    await withRecordingSsh(async (calls) => {
+      await systemdUnitProvider.delete!("nowhere:job.service", {
+        ...job,
+        active: "inactive",
+        enabled: "generated",
+      });
+      expect(calls().join("\n")).toContain("systemctl stop job.service");
     });
   });
 });

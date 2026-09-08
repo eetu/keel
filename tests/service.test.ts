@@ -26,6 +26,7 @@ import {
   secretFields,
   secretFileShape,
   secretsPath,
+  type ServiceSpec,
   subdomainOf,
 } from "../src/config/spec";
 import { type ServiceSecretFile } from "../src/config/types";
@@ -35,6 +36,8 @@ import {
   NETWORK_NAMES,
   renderNetworks,
   renderQuadlet,
+  renderTimer,
+  timerPath,
 } from "../src/render/quadlet";
 import { routersOf } from "./routeYaml";
 
@@ -55,45 +58,59 @@ describe("host declarations", () => {
   });
 });
 
+/**
+ * Every host port a set of entries claims, and what two claimants of one look
+ * like.
+ *
+ * One namespace per transport, because a host port is a host port however it is
+ * bound: a host-network service binds it on every address, and a bridge
+ * service's `PublishPort` binds it on loopback. Both would collide with each
+ * other, with sshd, and with the resolver the image runs.
+ *
+ * A service may claim the same port twice — Traefik's 443 is both what it binds
+ * and what the filter admits — so a collision is two *owners*. A scheduled entry
+ * claims nothing: it runs to completion, no process ever binds its number, and
+ * reserving one for a listener that does not exist would report the first real
+ * user of it as a clash.
+ */
+function portConflicts(specs: readonly ServiceSpec[]): readonly string[] {
+  const claims: Record<"tcp" | "udp", Map<number, string>> = { tcp: new Map(), udp: new Map() };
+  const conflicts: string[] = [];
+  const claim = (proto: "tcp" | "udp", port: number, owner: string) => {
+    const held = claims[proto].get(port);
+    if (held !== undefined && held !== owner) conflicts.push(`${proto}/${port}: ${held}, ${owner}`);
+    claims[proto].set(port, owner);
+  };
+
+  claim("tcp", 22, "sshd");
+  // Loopback-only, but still the host's port, and Pi-hole's upstream.
+  claim("tcp", UNBOUND.port, "unbound");
+  claim("udp", UNBOUND.port, "unbound");
+  // The proxy's ping endpoint, which its own health check dials. Loopback, but
+  // the proxy runs on the host's network stack — and Traefik's default would
+  // have taken :8080, which the resolver's web UI binds.
+  claim("tcp", TRAEFIK_PING_PORT, CATALOG.proxy!.spec.name);
+
+  const ingressSets: readonly (readonly [keyof Ingress, "tcp" | "udp"])[] = [
+    ["lanTcp", "tcp"],
+    ["lanUdp", "udp"],
+    ["meshTcp", "tcp"],
+    ["meshUdp", "udp"],
+    ["worldTcp", "tcp"],
+    ["worldUdp", "udp"],
+  ];
+  for (const spec of specs) {
+    if (spec.schedule === undefined) claim("tcp", spec.port, spec.name);
+    for (const [key, proto] of ingressSets) {
+      for (const port of spec.ingress?.[key] ?? []) claim(proto, port, spec.name);
+    }
+  }
+  return conflicts;
+}
+
 describe("the catalog as a whole", () => {
   it("gives every port on the host exactly one owner", () => {
-    // One namespace per transport, because a host port is a host port however
-    // it is bound: a host-network service binds it on every address, and a
-    // bridge service's `PublishPort` binds it on loopback. Both would collide
-    // with each other, with sshd, and with the resolver the image runs.
-    //
-    // A service may claim the same port twice — Traefik's 443 is both what it
-    // binds and what the filter admits — so a collision is two *owners*.
-    const claims: Record<"tcp" | "udp", Map<number, string>> = { tcp: new Map(), udp: new Map() };
-    const claim = (proto: "tcp" | "udp", port: number, owner: string) => {
-      const held = claims[proto].get(port);
-      expect(held ?? owner, `${proto}/${port}`).toBe(owner);
-      claims[proto].set(port, owner);
-    };
-
-    claim("tcp", 22, "sshd");
-    // Loopback-only, but still the host's port, and Pi-hole's upstream.
-    claim("tcp", UNBOUND.port, "unbound");
-    claim("udp", UNBOUND.port, "unbound");
-    // The proxy's ping endpoint, which its own health check dials. Loopback, but
-    // the proxy runs on the host's network stack — and Traefik's default would
-    // have taken :8080, which the resolver's web UI binds.
-    claim("tcp", TRAEFIK_PING_PORT, CATALOG.proxy!.spec.name);
-
-    const ingressSets: readonly (readonly [keyof Ingress, "tcp" | "udp"])[] = [
-      ["lanTcp", "tcp"],
-      ["lanUdp", "udp"],
-      ["meshTcp", "tcp"],
-      ["meshUdp", "udp"],
-      ["worldTcp", "tcp"],
-      ["worldUdp", "udp"],
-    ];
-    for (const spec of SERVICES) {
-      claim("tcp", spec.port, spec.name);
-      for (const [key, proto] of ingressSets) {
-        for (const port of spec.ingress?.[key] ?? []) claim(proto, port, spec.name);
-      }
-    }
+    expect(portConflicts(SERVICES)).toEqual([]);
   });
 
   it("assigns each service a distinct subdomain", () => {
@@ -183,6 +200,142 @@ describe.each(SERVICES)("$name quadlet", (spec) => {
       const value = line.slice(line.indexOf("=", "Environment=".length) + 1);
       expect(value === "" || value.startsWith("/"), line).toBe(true);
     }
+  });
+});
+
+describe("an entry that runs on a schedule", () => {
+  /**
+   * A job, as a fixture. Nothing from either catalog: no committed entry runs on
+   * a schedule and a local one is one house's, so the mechanism is asserted on a
+   * declaration written here — which is also what makes these pass on a clean
+   * clone.
+   */
+  const job = (extra: Partial<ServiceSpec> = {}): ServiceSpec => ({
+    name: "job",
+    description: "A job that runs and exits",
+    image: `example.test/job@sha256:${"0".repeat(64)}`,
+    // Nominal: nothing binds it, and `ServiceSpec.port` is not optional.
+    port: 9100,
+    memory: { max: 64, tier: "apps" },
+    subdomain: null,
+    auth: "open",
+    schedule: "*-*-* 04,16:00 UTC",
+    ...extra,
+  });
+
+  it("renders a one-shot that systemd can see the exit status of", () => {
+    // `Type=oneshot` is the whole mechanism and not a label: quadlet's default
+    // for a `.container` puts `--sdnotify=conmon -d` on the generated ExecStart,
+    // which detaches — `podman run` returns 0 as soon as the container is up and
+    // a failing job looks exactly like a working one. Stating the type makes
+    // quadlet drop the `-d`, so the exit code arrives and a bad run leaves the
+    // unit failed, which is the state the image's poller lists.
+    const quadlet = renderQuadlet(job());
+    expect(quadlet).toContain("Type=oneshot");
+    // And a restart policy is a claim that the unit should be running, which
+    // would turn every finished run into the next one.
+    expect(quadlet).not.toContain("Restart=");
+    expect(quadlet).not.toContain("RestartSec=");
+    // `RemainAfterExit=yes` leaves the unit "started", and a timer's next
+    // activation is refused against a unit in that state.
+    expect(quadlet).not.toContain("RemainAfterExit");
+    // The start timeout is the only bound on the run: systemd's default for a
+    // one-shot is infinity, so a job wedged on an upstream would still be
+    // running when its timer next fired.
+    expect(quadlet).toContain("TimeoutStartSec=600");
+  });
+
+  it("is wanted by no target, so a schedule is not a boot", () => {
+    // `[Install] WantedBy=multi-user.target` is what makes the generator want a
+    // unit at every startup, which for a one-shot is a run on every reboot. The
+    // timer beside it is the only thing that starts it.
+    expect(renderQuadlet(job())).not.toContain("[Install]");
+    expect(renderQuadlet(job())).not.toContain("WantedBy=");
+  });
+
+  it("publishes nothing, on a bridge as much as on the host", () => {
+    // A forward into a namespace that exists for a few seconds a day is a rule
+    // with nothing behind it, and the port it would name is nominal.
+    expect(renderQuadlet(job({ egress: "internal" }))).not.toContain("PublishPort=");
+    expect(renderQuadlet(job({ egress: "open" }))).not.toContain("PublishPort=");
+    // And it keeps the bridge itself: egress is orthogonal to the schedule.
+    expect(renderQuadlet(job({ egress: "open" }))).toContain(
+      `Network=${NETWORK_NAMES.open}.network`,
+    );
+  });
+
+  it("claims no host port, even one a real listener already owns", () => {
+    // Nothing binds it, so nothing can collide with it — and reserving the
+    // number would report the first real user of it as a clash. Asserted against
+    // a port some deployed service does own, because that is the case a rule
+    // written the other way would have failed on.
+    for (const spec of SERVICES) {
+      expect(portConflicts([...SERVICES, job({ port: spec.port })]), spec.name).toEqual([]);
+    }
+  });
+
+  it("keeps everything an entry derives that is not about listening", () => {
+    // The point of the field: a scheduled entry is a `ServiceSpec` and not a
+    // kind of its own, so the cap, the slice, the sealed environment, the decrypt
+    // it waits for and the mounts are all still derived from it.
+    const quadlet = renderQuadlet(
+      job({
+        secretEnv: { API_KEY: "api_key" },
+        mounts: ["/var/lib/job:/data:Z,U"],
+      }),
+    );
+    expect(quadlet).toContain("Slice=keel-apps.slice");
+    expect(quadlet).toContain("EnvironmentFile=/etc/secrets/job.env");
+    expect(quadlet).toContain("keel-secrets.service");
+    expect(quadlet).toContain("Volume=/var/lib/job:/data:Z,U");
+    expect(quadlet).toContain("ExecStartPre=/usr/bin/mkdir -p /var/lib/job");
+    // Still ordered behind greenboot's verdict: a job that wrote to /var/lib
+    // before the image was declared good would leave data behind a rollback.
+    expect(quadlet).toContain("boot-complete.target");
+  });
+
+  it("runs from a timer that waits for the clock", () => {
+    // A board with no RTC boots at the image's build date and is stepped forward
+    // by weeks. A persistent timer loaded before the step discards its stamp as
+    // "in the future" and treats every calendar elapse inside the jump as
+    // missed — a run on every boot — which is what this line prevents.
+    const timer = renderTimer(job());
+    expect(timer).toContain("After=time-sync.target");
+    expect(timer).toContain("OnCalendar=*-*-* 04,16:00 UTC");
+    expect(timer).toContain("Persistent=true");
+    // The timer is the half with an [Install]: enabling it is what starts the
+    // clock, and it activates `job.service` by default — the unit quadlet
+    // generates — so neither half names the other.
+    expect(timer).toContain("WantedBy=timers.target");
+    expect(timer).not.toContain("Unit=");
+    expect(timerPath(job())).toBe("/etc/systemd/system/job.timer");
+  });
+
+  it("has no timer to build for an entry that stays up", () => {
+    expect(() => renderTimer(job({ schedule: undefined }))).toThrow(/no schedule/);
+  });
+
+  it("captures its output to a file, with its own logging kept out of it", () => {
+    // The sink any third-party image can use: a job that prints its result needs
+    // no egress to hand it over and no credential to do it with, and whatever
+    // wants the result mounts the path read-only. `StandardError=journal` is not
+    // a preference — systemd's default is to duplicate `StandardOutput=`, so
+    // without it the run's own logging is interleaved into the document.
+    const quadlet = renderQuadlet(job({ stdoutFile: "/var/lib/job/out/latest.json" }));
+    expect(quadlet).toContain("StandardOutput=file:/var/lib/job/out/latest.json");
+    expect(quadlet).toContain("StandardError=journal");
+    // systemd creates the file and not the path to it, so a sink under a
+    // directory nothing else makes is a unit that fails before the job runs.
+    expect(quadlet).toContain("ExecStartPre=/usr/bin/mkdir -p /var/lib/job/out");
+  });
+
+  it("carries no health check, because there is nothing to be healthy", () => {
+    // A `Type=oneshot` container asked to notify readiness fails outright, so
+    // the renderer emits neither half. The declaration itself is refused by
+    // name at plan time — see the deployment gaps.
+    const quadlet = renderQuadlet(job({ healthCmd: "CMD true" }));
+    expect(quadlet).not.toContain("HealthCmd=");
+    expect(quadlet).not.toContain("Notify=healthy");
   });
 });
 

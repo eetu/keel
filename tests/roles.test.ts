@@ -282,6 +282,45 @@ describe("what a deployed set is missing", () => {
     );
     expect(errors.join("\n")).toMatch(/split declares 2 routers with no match/);
   });
+
+  /** A job that runs to completion. A fixture, so this passes on a clean clone. */
+  const job = (extra: Partial<ServiceSpec> = {}) =>
+    plain("job", { schedule: "*-*-* 04,16:00 UTC", ...extra });
+
+  it("refuses a health check on an entry that runs to completion", () => {
+    // A check is a question about a listener. `Notify=healthy` would hold the
+    // start job open until it timed out, so every successful run would be
+    // recorded as a failed one — and the failure poller would report it.
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec, job({ healthCmd: "CMD true" })]));
+    expect(errors.join("\n")).toMatch(/run on a schedule and declare a health check: job/);
+    expect(deploymentGaps(catalogOf([PROXY.spec, job()])).errors).toEqual([]);
+  });
+
+  it("refuses a vhost on an entry that runs to completion", () => {
+    // The route, the hosts-file line and the status check would all point at a
+    // port nothing binds — three ways of asking a question nothing answers.
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec, job({ subdomain: "job" })]));
+    expect(errors.join("\n")).toMatch(/run on a schedule and answer a vhost: job/);
+  });
+
+  it("refuses captured output on an entry with no schedule", () => {
+    // `StandardOutput=file:` truncates at start, so a service that stays up
+    // would leave a reader a document that empties whenever the unit restarts.
+    const { errors } = deploymentGaps(
+      catalogOf([PROXY.spec, job({ schedule: undefined, stdoutFile: "/var/lib/job/out.json" })]),
+    );
+    expect(errors.join("\n")).toMatch(/capture their output to a file and run on no schedule: job/);
+    expect(
+      deploymentGaps(catalogOf([PROXY.spec, job({ stdoutFile: "/var/lib/job/out.json" })])).errors,
+    ).toEqual([]);
+  });
+
+  it("refuses a captured path that is not the host's", () => {
+    // systemd resolves a relative path against the unit's working directory, so
+    // it lands somewhere nothing mounts.
+    const { errors } = deploymentGaps(catalogOf([PROXY.spec, job({ stdoutFile: "out.json" })]));
+    expect(errors.join("\n")).toMatch(/output to a path that is not absolute: job/);
+  });
 });
 
 describe("the order a deployed set is started in", () => {
