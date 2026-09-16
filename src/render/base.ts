@@ -72,7 +72,11 @@ function sshd(): Tree {
 
       X11Forwarding no
       PrintMotd no
-      AcceptEnv LANG LC_*
+      # No AcceptEnv: the image carries glibc-minimal-langpack, so C.UTF-8 is the
+      # only locale on it. A forwarded LANG — macOS sends en_US.UTF-8 by default —
+      # fails setlocale in the remote bash and prints three warnings per session,
+      # a provider's non-interactive command included. Honouring it would mean
+      # shipping a langpack for a collation no server uses.
       Subsystem sftp /usr/libexec/openssh/sftp-server
 
       # Scoped exception to the global no above: an admin may TCP-forward, so
