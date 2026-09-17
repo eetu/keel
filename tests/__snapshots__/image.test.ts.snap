@@ -1255,6 +1255,14 @@ net.ipv6.conf.default.accept_ra = 2
 "
 `;
 
+exports[`/usr/lib/systemd/coredump.conf.d/99-keel.conf > renders the same bytes 1`] = `
+"mode 644
+[Coredump]
+Storage=none
+ProcessSizeMax=0
+"
+`;
+
 exports[`/usr/lib/systemd/journald.conf.d/99-keel.conf > renders the same bytes 1`] = `
 "mode 644
 [Journal]
