@@ -122,7 +122,7 @@ describe("the catalog as a whole", () => {
 describe.each(SERVICES)("$name quadlet", (spec) => {
   const quadlet = renderQuadlet(spec);
 
-  it("binds to loopback only", () => {
+  it("binds to loopback unless the filter admits its port", () => {
     if ((spec.egress ?? "internal") === "host") {
       // Host networking has no `PublishPort` to narrow the bind: what the
       // service is told to listen on is a host address, so a wildcard puts it on
@@ -141,7 +141,16 @@ describe.each(SERVICES)("$name quadlet", (spec) => {
       }
       return;
     }
-    expect(quadlet).toContain(`PublishPort=127.0.0.1:${spec.port}:${spec.port}`);
+    // The bridge half of the same rule: a published port is a loopback forward,
+    // which is all the proxy needs, and an entry naming its own port in
+    // `ingress` is saying something off the board dials it directly.
+    const admitted = new Set([
+      ...(spec.ingress?.lanTcp ?? []),
+      ...(spec.ingress?.meshTcp ?? []),
+      ...(spec.ingress?.worldTcp ?? []),
+    ]);
+    const address = admitted.has(spec.port) ? "0.0.0.0" : "127.0.0.1";
+    expect(quadlet).toContain(`PublishPort=${address}:${spec.port}:${spec.port}`);
   });
 
   it("places itself in a slice but sets no memory cap", () => {
@@ -200,6 +209,45 @@ describe.each(SERVICES)("$name quadlet", (spec) => {
       const value = line.slice(line.indexOf("=", "Environment=".length) + 1);
       expect(value === "" || value.startsWith("/"), line).toBe(true);
     }
+  });
+});
+
+describe("an entry something off the board dials", () => {
+  // Nothing in either catalog is this shape yet, and the rule is what makes a
+  // second board possible: the proxy on one board reaches an app on another by
+  // dialling a port that board publishes off loopback. Held here rather than
+  // waiting for the first entry to need it, because the failure is silent — the
+  // filter admits the port, podman forwards only 127.0.0.1, and the packet dies
+  // on the app board with nothing logged on either side.
+  const app = (extra: Partial<ServiceSpec> = {}): ServiceSpec => ({
+    name: "app",
+    description: "An app another board's proxy routes to",
+    image: `example.test/app@sha256:${"0".repeat(64)}`,
+    port: 9200,
+    memory: { max: 64, tier: "apps" },
+    subdomain: null,
+    auth: "open",
+    ...extra,
+  });
+
+  it("publishes off loopback exactly when the filter admits its port", () => {
+    expect(renderQuadlet(app({ ingress: { lanTcp: [9200] } }))).toContain(
+      "PublishPort=0.0.0.0:9200:9200",
+    );
+    expect(renderQuadlet(app({ ingress: { meshTcp: [9200] } }))).toContain(
+      "PublishPort=0.0.0.0:9200:9200",
+    );
+  });
+
+  it("stays on loopback for a port the filter admits on someone else's behalf", () => {
+    // A rule for a port this entry does not bind says nothing about where its
+    // own port belongs, and neither does one for the same number over UDP.
+    expect(renderQuadlet(app({ ingress: { lanTcp: [9300] } }))).toContain(
+      "PublishPort=127.0.0.1:9200:9200",
+    );
+    expect(renderQuadlet(app({ ingress: { lanUdp: [9200] } }))).toContain(
+      "PublishPort=127.0.0.1:9200:9200",
+    );
   });
 });
 

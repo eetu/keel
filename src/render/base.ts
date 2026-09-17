@@ -103,6 +103,36 @@ function journald(): Tree {
 }
 
 /**
+ * The abort a core comes from is systemd's own: Fedora ships
+ * `TimeoutStopFailureMode=abort` as a global drop-in, so any unit that will not
+ * stop in time is killed with SIGABRT to leave something to debug with. A
+ * transient `podman healthcheck run` unit that hangs under memory pressure is
+ * exactly that, and each one hands this handler a 7 MB core.
+ *
+ * On a 1 GB board the handler is then the failure. Compressing that core at
+ * `Nice=9` against a swapping machine overran `systemd-coredump@`'s own stop
+ * timeout, so the poller reported a *failed unit* for a service that had already
+ * recovered — a phone alert whose subject is the debugging aid rather than the
+ * fault. Dumping is off instead: the journal still records the signal and the
+ * process, which is the part anybody acts on, and a core here was never readable
+ * anyway — the image carries no gdb and no binutils, by the same rule that keeps
+ * everything else off it.
+ *
+ * `ProcessSizeMax=0` and not `Storage=none` alone: the latter still reads the
+ * process to log a backtrace, which is most of the cost being avoided.
+ */
+function coredump(): Tree {
+  return file(
+    "/usr/lib/systemd/coredump.conf.d/99-keel.conf",
+    dedent(`
+      [Coredump]
+      Storage=none
+      ProcessSizeMax=0
+    `),
+  );
+}
+
+/**
  * The kernel version is fixed by the image, so this needs no runtime probe: a
  * denied module is denied for as long as this image is booted, and the decision
  * is reviewable in the same diff as everything else.
@@ -272,6 +302,7 @@ export function renderBase(): Tree {
   return merge(
     sshd(),
     journald(),
+    coredump(),
     modprobeDeny(),
     tmpfiles(),
     maskedUnits(),
