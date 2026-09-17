@@ -752,7 +752,7 @@ exports[`/usr/lib/keel/profiles/1g/units/keel-apps.slice.conf > renders the same
 # accounted for. The apps' own caps may total more than this on
 # purpose: they are idle Go and Rust binaries and are never all hot at
 # once, and throttling here is how that is resolved.
-MemoryHigh=240M
+MemoryHigh=486M
 "
 `;
 
@@ -772,7 +772,7 @@ exports[`/usr/lib/keel/profiles/4g/units/keel-apps.slice.conf > renders the same
 # accounted for. The apps' own caps may total more than this on
 # purpose: they are idle Go and Rust binaries and are never all hot at
 # once, and throttling here is how that is resolved.
-MemoryHigh=3120M
+MemoryHigh=3366M
 "
 `;
 
@@ -792,7 +792,7 @@ exports[`/usr/lib/keel/profiles/8g/units/keel-apps.slice.conf > renders the same
 # accounted for. The apps' own caps may total more than this on
 # purpose: they are idle Go and Rust binaries and are never all hot at
 # once, and throttling here is how that is resolved.
-MemoryHigh=6960M
+MemoryHigh=7206M
 "
 `;
 

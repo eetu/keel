@@ -128,11 +128,43 @@ export function tierMaxTotalMb(tier: Tier, profile: Profile): number {
 }
 
 /**
+ * Sum of what one tier is *observed* to hold, for the entries that record it.
+ *
+ * `measuredMb` is what a service was seen using; `max` is the ceiling it may
+ * never cross. Both are true and they answer different questions, so the two
+ * totals are kept apart rather than one standing in for the other. An entry
+ * without an observation falls back to its cap, which is the conservative
+ * reading — an unmeasured service is assumed to want everything it is allowed.
+ */
+export function tierMeasuredTotalMb(tier: Tier, profile: Profile): number {
+  return everyCap()
+    .filter((memory) => memory.tier === tier)
+    .reduce((sum, memory) => sum + (memory.measuredMb ?? maxUnder(memory, profile)), 0);
+}
+
+/**
  * What is left for the application tier once the protected tier and the kernel's
  * reserve are accounted for. This is the number the `keel-apps.slice` throttle
  * carries: the apps' own caps may add up to more than it, deliberately, and the
  * slice is where that overcommitment is resolved rather than on the board.
+ *
+ * Priced against what the core tier *holds* and not against what it may hold,
+ * and that difference is the whole of this function. The two numbers serve
+ * different mechanisms: `MemoryLow` on the core slice is a protection, and it
+ * uses the cap sum, because under real contention the core tier must be able to
+ * grow into every megabyte it is allowed. `MemoryHigh` here is a throttle, and
+ * it binds *always* — so pricing it against the same worst case withholds the
+ * gap between the two from the apps at every moment the worst case is not
+ * happening, which is nearly all of them.
+ *
+ * Measured on a 1 GB board: the core tier's caps total 464 MB against 176 MB
+ * actually held, so the apps were throttled to 240 MB while 390 MB sat free and
+ * 137 MB of their working set lived in compressed swap — paid for at every
+ * access as a major fault. The overlap the two numbers now have is deliberate
+ * and safe in exactly one direction: a throttle that lets the apps use free
+ * memory costs nothing when the core tier later wants it back, because the
+ * protection is what decides that case.
  */
 export function appsRoomMb(profile: Profile): number {
-  return profile.targetRamMb - profile.reserveMb - tierMaxTotalMb("core", profile);
+  return profile.targetRamMb - profile.reserveMb - tierMeasuredTotalMb("core", profile);
 }
