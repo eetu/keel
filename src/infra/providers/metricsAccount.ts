@@ -89,6 +89,13 @@ type Outs = MetricsAccountInputs & {
   plaintextHash: string;
   /** The hub's id for the account, which is also this resource's id. */
   userId: string;
+  /**
+   * Machines on the hub this account cannot see, as of the last read. Written by
+   * `read` and never by the program, which is what makes a laptop somebody
+   * enrolled last week surface as drift rather than as a page quietly missing a
+   * row. Always zero the moment an `up` has run.
+   */
+  missing?: number;
 };
 
 /**
@@ -208,10 +215,51 @@ except urllib.error.HTTPError as error:
 sys.stdout.write(json.dumps({"id": uid}))
 `;
 
-/** Whether the account is still there, which is the whole of this resource's `read`. */
+/**
+ * Whether the account is still there, and how many machines it cannot see.
+ *
+ * The second half is what makes "assign it to everything" a claim this resource
+ * keeps rather than one it made once. The hub's systems are added by a person
+ * long after any deploy — a laptop enrolled on a Tuesday — and an account that
+ * was assigned to every machine at creation is assigned to none of them. What
+ * that looks like is the dashboard's page missing a host that the hub's own UI
+ * shows, with nothing failed and nothing to refresh: the API answers correctly
+ * for two different accounts.
+ */
 const LOOKUP = `
 serving()
-sys.stdout.write(json.dumps({"id": find(token())}))
+auth = token()
+uid = find(auth)
+missing = 0
+if uid is not None:
+    for machine in call("%s?perPage=200" % P["api"]["systems"], token=auth)["items"]:
+        if uid not in (machine.get("users") or []):
+            missing += 1
+sys.stdout.write(json.dumps({"id": uid, "missing": missing}))
+`;
+
+/**
+ * Assign the account to every machine it is not on, and touch nothing else.
+ *
+ * Separate from the upsert because the upsert draws a new password: a machine
+ * appearing on the hub is not a reason to rotate a credential and restart the
+ * service that reads it.
+ */
+const ASSIGN = `
+serving()
+auth = token()
+uid = find(auth)
+if uid is None:
+    fail("the account is gone")
+try:
+    for machine in call("%s?perPage=200" % P["api"]["systems"], token=auth)["items"]:
+        seen = machine.get("users") or []
+        if uid in seen:
+            continue
+        call("%s/%s" % (P["api"]["systems"], machine["id"]), "PATCH", {"users": seen + [uid]}, auth)
+except urllib.error.HTTPError as error:
+    fail("could not assign the account to a system: HTTP %d" % error.code)
+sys.stdout.write(json.dumps({"id": uid}))
 `;
 
 /** Remove it. Already gone is the state this was asking for. */
@@ -327,6 +375,18 @@ async function provision(inputs: MetricsAccountInputs): Promise<{ id: string; ou
   return { id: account.id, outs: { ...inputs, ...sealed, userId: account.id } };
 }
 
+/**
+ * Whether a change is one the account itself is made of, which is the set that
+ * costs a new password and a restart of whatever reads it. The hub's own paths
+ * moving is not, and neither is how this reaches the board: `host` and `sshArgs`
+ * are the route, not the resource.
+ */
+const rotates = (olds: Outs, news: MetricsAccountInputs): boolean =>
+  olds.role !== news.role ||
+  olds.envNames.user !== news.envNames.user ||
+  olds.envNames.password !== news.envNames.password ||
+  olds.ageRecipient !== news.ageRecipient;
+
 const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
   async create(inputs) {
     return provision(inputs);
@@ -337,15 +397,21 @@ const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
     // some hub, and which hub, which vault and which variables it was sealed
     // into are not in it.
     if (!props) return { id: undefined };
-    const found = await speak<{ id: string | null }>(props, "look the account up", LOOKUP);
+    const found = await speak<{ id: string | null; missing: number }>(
+      props,
+      "look the account up",
+      LOOKUP,
+    );
     // Deleted in the hub's UI is deleted here too, and the next `up` creates it
     // again with a fresh password.
     if (found.id === null) return { id: undefined };
     // Everything else is carried through untouched. The password cannot be read
     // back — the hub stores a hash of it, and this holds only ciphertext — and
     // generating a new one on every refresh would rewrite the blob and restart
-    // the service that reads it, every run, for no change at all.
-    return { id, props };
+    // the service that reads it, every run, for no change at all. What does come
+    // back is how many machines the account is not on, which is the one part of
+    // this resource's state a person can change without touching the account.
+    return { id, props: { ...props, missing: found.missing } };
   },
 
   async check(_olds, news) {
@@ -390,19 +456,33 @@ const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
     // contents are not inputs, and the hub's own paths moving is not a reason to
     // change anybody's password. Neither is the board being reached differently:
     // `host` and `sshArgs` are how this gets there, not what it does.
+    // A machine the account cannot see is a change too, and the only one here
+    // that nothing in the program states: it arrives from the refresh, because
+    // somebody enrolled a laptop on the hub after the last deploy.
     return {
-      changes:
-        olds.role !== news.role ||
-        olds.envNames.user !== news.envNames.user ||
-        olds.envNames.password !== news.envNames.password ||
-        olds.ageRecipient !== news.ageRecipient,
+      changes: rotates(olds, news) || (olds.missing ?? 0) > 0,
     };
   },
 
-  async update(_id, _olds, news) {
+  async update(_id, olds, news) {
     // The same account: the two inputs that would make it another one replace
     // this resource instead. So the upsert finds the record it made last time
-    // and gives it a password nobody has seen either.
+    // and gives it a password nobody has seen either — but only where something
+    // that account is made of actually moved. A machine appearing on the hub is
+    // not a reason to rotate a credential and restart the page that reads it, so
+    // that case assigns and keeps the blob it already sealed.
+    if (!rotates(olds, news)) {
+      await speak(news, "assign the account to every machine", ASSIGN);
+      return {
+        outs: {
+          ...news,
+          ciphertext: olds.ciphertext,
+          plaintextHash: olds.plaintextHash,
+          userId: olds.userId,
+          missing: 0,
+        },
+      };
+    }
     return { outs: (await provision(news)).outs };
   },
 
