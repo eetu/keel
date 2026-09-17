@@ -1310,6 +1310,13 @@ RuntimeMaxUse=64M
 "
 `;
 
+exports[`/usr/lib/systemd/system.conf.d/99-keel-timeout.conf > renders the same bytes 1`] = `
+"mode 644
+[Manager]
+DefaultTimeoutStopSec=120s
+"
+`;
+
 exports[`/usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/50-keel.conf > renders the same bytes 1`] = `
 "mode 644
 [Service]
