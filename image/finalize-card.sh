@@ -76,16 +76,21 @@ kernel=rpi-u-boot.bin
 arm_64bit=1
 enable_uart=1
 uart_2ndstage=1
-# The firmware takes this before the kernel exists, so it is memory the board
-# never sees: a 1 GB Pi 4 reports 863 MB of its 1024, and 64 of the missing MB
-# are this. Every board this image builds is headless — no display, no camera,
-# no hardware video decode — and 16 is the documented floor. On a 1 GB board the
-# 48 MB it returns is more than the whole apps tier had spare.
+# Deliberately no gpu_mem line, and 16 in particular is the value that bricks a
+# card built here. It is documented as the floor and reads like the obvious
+# headless saving, but setting it switches the firmware to the *cut-down* blobs —
+# start_cd.elf and fixup_cd.dat — and the boot chain lifted out of the image
+# above stages only start.elf/start4.elf and their fixups. The firmware then
+# looks for a file that is not on the ESP and stops there: no U-Boot, no GRUB, no
+# kernel, and a board that does not answer so much as an ARP request. greenboot
+# cannot rescue it either, because the rollback it would perform lives two stages
+# further on, inside a Linux that never starts.
 #
-# A board that ever needs a screen or the camera stack raises this on its own
-# ESP, which is where the value belongs: config.txt is written once per card
-# rather than carried in the image, so it is already the per-board file.
-gpu_mem=16
+# The saving was not what it appeared to be in any case. On a Pi 4 under KMS the
+# 3D core has its own MMU and takes its memory dynamically from Linux, so this
+# pool serves the codecs and the camera — neither of which a board here runs.
+# `max_framebuffers=0` is the documented headless lever that changes no firmware,
+# and it is the one to reach for if the megabytes are ever worth chasing.
 EOF
 
 cat > "${work}/finalize.sh" <<'INNER'
