@@ -277,6 +277,7 @@ describe("an entry that is stopped when idle", () => {
     subdomain: null,
     auth: "open",
     idleStop: "15min",
+    healthCmd: "CMD /app/health",
     ...extra,
   });
 
@@ -331,6 +332,17 @@ describe("an entry that is stopped when idle", () => {
     expect(gaps(idle({ schedule: "*-*-* 04:00 UTC" }))).toContain("no listener to be dialled");
     expect(gaps(idle({ egress: "host" }))).toContain("binds the advertised port itself");
     expect(socketActivated(idle({ schedule: "*-*-* 04:00 UTC" }))).toBe(false);
+  });
+
+  it("is refused without a health check, because the proxy dials on start", () => {
+    // Measured: the proxy connected one second after the container's start job
+    // finished and got "Connection refused" from an application that answered
+    // twelve seconds later. Without `Notify=healthy` the start job means the
+    // container is running, and the whole mechanism turns on that job meaning
+    // the service can answer — the same rule the boot chain rests on.
+    const spec = { ...idle() };
+    delete spec.healthCmd;
+    expect(deploymentGaps(catalogOf([spec])).errors.join(" ")).toContain("declare no health check");
   });
 });
 

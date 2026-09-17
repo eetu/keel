@@ -16,6 +16,19 @@
  * mounts fine and every file in it answers a container with `Permission denied`
  * — a music server with an empty library, a deploy that looked clean.
  *
+ * **The socket in front of an entry that is stopped when idle.** systemd creates
+ * a socket unit's listener in the domain of the service it activates, so the
+ * bind happens as `systemd_socket_proxyd_t` — which may bind and connect only
+ * what `systemd_socket_proxyd_bind_any` and `systemd_socket_proxyd_connect_any`
+ * allow, both off by default. Without them the socket fails to listen at all
+ * (`Failed to create listening socket … Permission denied`, `result 'resources'`)
+ * and the service it fronts is simply never reachable. Labelling the two ports
+ * instead would be a `semanage port` pair per socket-activated entry, each a
+ * policy commit, for a domain that exists to forward exactly what keel points it
+ * at. Forcing the unit into another domain is the trap: it fixes the bind and
+ * breaks the exec, because nothing else may enter that binary's entrypoint
+ * (`203/EXEC`).
+ *
  * There is no `ConditionPathExists=` on either tool, and its absence is the
  * point. A condition on the very tool the unit exists to run turns a broken
  * image into a skipped unit: nothing fails, nothing is logged, and the first
@@ -82,8 +95,14 @@ export function renderSelinux(): Tree {
             done
         fi
 
-        [ "$(getsebool virt_use_samba)" = "virt_use_samba --> on" ] ||
-            setsebool -P virt_use_samba on
+        # One invocation for whatever is off, because a commit costs the same
+        # whether it carries one boolean or three.
+        want=""
+        for boolean in virt_use_samba systemd_socket_proxyd_bind_any \\
+            systemd_socket_proxyd_connect_any; do
+            [ "$(getsebool "$boolean")" = "$boolean --> on" ] || want="$want $boolean=on"
+        done
+        [ -z "$want" ] || setsebool -P $want
       `),
     ),
   );

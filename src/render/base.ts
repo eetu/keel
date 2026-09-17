@@ -121,6 +121,40 @@ function journald(): Tree {
  * `ProcessSizeMax=0` and not `Storage=none` alone: the latter still reads the
  * process to log a backtrace, which is most of the cost being avoided.
  */
+/**
+ * How long a unit may take to stop before systemd gives up on it.
+ *
+ * Fedora ships 45 seconds (the Shorter Shutdown Timer change), which is a
+ * desktop's answer. Stopping a container here is SIGTERM to the application,
+ * the wait for it, podman's cleanup, the overlay unmount and the network
+ * namespace teardown — and on a board at a load average of twenty, with the
+ * whole apps tier restarting at once, that does not fit. What happens then is
+ * not a slow stop but a killed one: the global `TimeoutStopFailureMode=abort`
+ * escalates to SIGABRT, the start half of the same `systemctl restart` then
+ * fails against a container still being cleaned up, and the deploy reports a
+ * restart that failed for a service which is about to come up perfectly well.
+ * Three units did exactly that on one deploy.
+ *
+ * Global rather than a line on each quadlet, because it is a fact about the
+ * board and not about any service — the same reason the journal's cap and the
+ * coredump policy live here. It also reaches the units a quadlet never wrote,
+ * which have the same 45 seconds and the same board underneath them. The cost
+ * is a reboot waiting longer on something genuinely wedged, which against a
+ * boot that already takes six minutes is not the number to optimise.
+ *
+ * The start side is the quadlet's own `TimeoutStartSec=600`: that one is about
+ * pulling an image, which is a property of the service rather than the host.
+ */
+function shutdownTimeout(): Tree {
+  return file(
+    "/usr/lib/systemd/system.conf.d/99-keel-timeout.conf",
+    dedent(`
+      [Manager]
+      DefaultTimeoutStopSec=120s
+    `),
+  );
+}
+
 function coredump(): Tree {
   return file(
     "/usr/lib/systemd/coredump.conf.d/99-keel.conf",
@@ -303,6 +337,7 @@ export function renderBase(): Tree {
     sshd(),
     journald(),
     coredump(),
+    shutdownTimeout(),
     modprobeDeny(),
     tmpfiles(),
     maskedUnits(),

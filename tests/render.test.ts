@@ -339,6 +339,22 @@ describe("the mesh agent the image carries", () => {
     }
   });
 
+  it("gives a unit longer to stop than a desktop would", () => {
+    // Fedora's 45s is the trap, because what follows it is not a slow stop but a
+    // killed one: the global TimeoutStopFailureMode=abort escalates to SIGABRT,
+    // and the start half of the same `systemctl restart` then fails against a
+    // container still being cleaned up. The deploy reports a restart that failed
+    // for a service about to come up perfectly well.
+    expect(content("/usr/lib/systemd/system.conf.d/99-keel-timeout.conf")).toContain(
+      "DefaultTimeoutStopSec=120s",
+    );
+    // And the start side stays the quadlet's, because how long a first pull
+    // takes is a property of the service rather than of the board.
+    expect(content("/usr/lib/systemd/system.conf.d/99-keel-timeout.conf")).not.toContain(
+      "DefaultTimeoutStartSec",
+    );
+  });
+
   it("declares forwarding for both families, and does not lose IPv6 doing it", () => {
     // A routing peer forwards or it carries nothing, and the kernel refuses
     // with these off. The `accept_ra` pair is the trap: its default means
