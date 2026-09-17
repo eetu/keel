@@ -756,6 +756,44 @@ export type ServiceSpec = {
    */
   schedule?: string;
   /**
+   * Stop this entry when nothing has dialled it for this long, and start it
+   * again when something does. A systemd timespan — `"15min"`.
+   *
+   * What a board with 24 services and a gigabyte of RAM is actually short of is
+   * not capacity but residency: most of these are Go and Rust binaries that idle
+   * for hours and are needed for seconds, and an idle process still owns its
+   * anonymous pages, which on a full board means it owns compressed swap and
+   * faults its way back in whenever its runtime wakes to check whether it should
+   * exit. Stating a timespan here is what turns "always running" into
+   * "always reachable".
+   *
+   * Three units and one port. The socket holds the entry's advertised port from
+   * boot, so every consumer — the proxy's route, another service's client, a
+   * status check — dials exactly what it dialled before and never learns that
+   * anything changed. `systemd-socket-proxyd` is what stands behind it: the
+   * container is published on a derived port instead, and the proxy forwards to
+   * it, pulling the container in as its own dependency and exiting once the
+   * timespan passes with no connection. `StopWhenUnneeded=` on the container is
+   * what makes the proxy's exit stop it.
+   *
+   * The proxy and not podman's own socket activation, which exists: that
+   * requires the *application* to accept a passed file descriptor, which is true
+   * of uvicorn and false of every Go and Rust binary on this fleet. A proxy in
+   * front asks nothing of the program it fronts.
+   *
+   * **What this costs is the first request after an idle period.** It waits for
+   * an image start, a health check and whatever the service does before it
+   * answers — measured at 12.7 s for a Python sidecar on a Pi 4. The connection
+   * itself is accepted immediately by the socket, so a client with a short
+   * *connect* timeout is not what breaks; a client with a short total timeout
+   * is. An entry whose callers cannot wait that long stays resident.
+   *
+   * It is refused for a scheduled entry, which has no listener to be dialled,
+   * and for `egress: "host"`, where the application binds the advertised port
+   * itself and there is no published port to move out of the socket's way.
+   */
+  idleStop?: string;
+  /**
    * Where a scheduled entry's standard output is captured, as an absolute path on
    * the host. It becomes `StandardOutput=file:` on the unit, and the directory is
    * created before the run.
@@ -1187,6 +1225,25 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
       `these run on a schedule and answer a vhost: ${named(answering)} — the route, the LAN ` +
         "name and the status check would all point at a port nothing binds, so a scheduled " +
         "entry states `subdomain: null`",
+    );
+  }
+  const idleScheduled = scheduled.filter((spec) => spec.idleStop !== undefined);
+  if (idleScheduled.length > 0) {
+    errors.push(
+      `these run on a schedule and ask to be stopped when idle: ${named(idleScheduled)} — a job ` +
+        "that runs to completion has no listener to be dialled, and its timer already starts it " +
+        "exactly as often as it should run",
+    );
+  }
+  const idleOnHost = catalog.services.filter(
+    (spec) => spec.idleStop !== undefined && (spec.egress ?? "internal") === "host",
+  );
+  if (idleOnHost.length > 0) {
+    errors.push(
+      `these ask to be stopped when idle and run on the host's network: ${named(idleOnHost)} — ` +
+        "the application binds the advertised port itself, so there is no published port to " +
+        "move out of the socket's way and the socket would fail to bind against the service " +
+        "it is meant to be starting",
     );
   }
   const capturing = catalog.services.filter(
