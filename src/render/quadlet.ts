@@ -22,6 +22,33 @@ export const NETWORK_INTERFACES = {
 } as const;
 
 /**
+ * Where a bridge service's port is published, derived from whether the packet
+ * filter admits that same port.
+ *
+ * Loopback is the answer for almost everything: the proxy is the only listener
+ * that faces the LAN, and it dials its upstreams on the host's own loopback.
+ * A service that names its own port in `ingress` is saying the opposite — that
+ * something off this board reaches it directly — and on a bridge those two
+ * statements have to agree. Published on loopback, the filter's rule admits a
+ * port whose forward goes nowhere off the host: the packet is accepted and then
+ * dropped for want of a listener, which reads as a routing fault on the machine
+ * that dialled it.
+ *
+ * The address is `0.0.0.0` and not the board's own, because a renderer is handed
+ * no installation and the artefact is one image for every board. What narrows
+ * the port to the LAN and the mesh is the filter, which is where every other
+ * source-address decision on this fleet already lives.
+ */
+export function publishAddress(spec: ServiceSpec): string {
+  const admitted = [
+    ...(spec.ingress?.lanTcp ?? []),
+    ...(spec.ingress?.meshTcp ?? []),
+    ...(spec.ingress?.worldTcp ?? []),
+  ];
+  return admitted.includes(spec.port) ? "0.0.0.0" : "127.0.0.1";
+}
+
+/**
  * One source for a network quadlet's content, whichever layer writes it: the
  * image ships the pair under `/usr/share/containers/systemd` so they exist
  * before any service does, and the Pulumi layer shadows them at
@@ -185,7 +212,7 @@ export function renderQuadlet(
           // Nothing to publish for a job that runs to completion: its port is
           // nominal, no process ever binds it, and a forward into a namespace
           // that exists for a few seconds a day is a rule with nothing behind it.
-          ...(scheduled ? [] : [`PublishPort=127.0.0.1:${spec.port}:${spec.port}`]),
+          ...(scheduled ? [] : [`PublishPort=${publishAddress(spec)}:${spec.port}:${spec.port}`]),
         ]),
     ...(spec.mounts ?? []).map((mount) => `Volume=${mount}`),
     // systemd splits an unquoted Environment= value on whitespace, so a value
