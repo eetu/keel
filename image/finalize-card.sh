@@ -76,6 +76,16 @@ kernel=rpi-u-boot.bin
 arm_64bit=1
 enable_uart=1
 uart_2ndstage=1
+# The firmware takes this before the kernel exists, so it is memory the board
+# never sees: a 1 GB Pi 4 reports 863 MB of its 1024, and 64 of the missing MB
+# are this. Every board this image builds is headless — no display, no camera,
+# no hardware video decode — and 16 is the documented floor. On a 1 GB board the
+# 48 MB it returns is more than the whole apps tier had spare.
+#
+# A board that ever needs a screen or the camera stack raises this on its own
+# ESP, which is where the value belongs: config.txt is written once per card
+# rather than carried in the image, so it is already the per-board file.
+gpu_mem=16
 EOF
 
 cat > "${work}/finalize.sh" <<'INNER'
