@@ -209,9 +209,25 @@ export function renderQuadlet(
     ...(spec.healthCmd && !scheduled
       ? [
           `HealthCmd=${spec.healthCmd}`,
-          // Tighter than podman's 30s default, because this interval is also how
-          // long the start job sits waiting for the first passing check.
-          "HealthInterval=5s",
+          // The same command again as the startup check, which is the whole
+          // point of the pair: an interval is also how long the start job sits
+          // waiting when a check has not passed yet, so a board wants it short
+          // while a service is coming up and long forever after.
+          //
+          // Forever is what the single 5s interval cost. Each run is a fresh
+          // `podman healthcheck run` — 15.6 MB peak and 0.23 s of CPU to map a
+          // 60 MB binary — and seven health-checked services at 5s is 84 of
+          // those a minute, a third of a core and enough page-cache churn to
+          // evict the services being checked. Under the resulting pressure the
+          // runs themselves hang, and systemd's global
+          // `TimeoutStopFailureMode=abort` turns a hang into a core dump.
+          //
+          // The startup check keeps the fast path: it runs at 5s until it
+          // passes, and `HealthStartupSuccess` defaults to 0, which podman
+          // documents as any success immediately starting the regular check.
+          `HealthStartupCmd=${spec.healthCmd}`,
+          "HealthStartupInterval=5s",
+          "HealthInterval=60s",
           "HealthStartPeriod=10s",
           "Notify=healthy",
         ]

@@ -807,6 +807,45 @@ exports[`/usr/lib/keel/profiles/index > renders the same bytes 1`] = `
 "
 `;
 
+exports[`/usr/lib/keel/prune-images > renders the same bytes 1`] = `
+"mode 755
+#!/usr/bin/bash
+# Reclaim container images this board no longer needs: everything outside
+# the set a container refers to, running or not, plus everything a quadlet
+# names.
+set -euo pipefail
+
+keep=$(mktemp)
+trap 'rm -f "$keep"' EXIT
+
+resolve() {
+    while read -r ref; do
+        [ -n "$ref" ] || continue
+        podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true
+    done
+}
+
+podman ps --all --format '{{.Image}}' | resolve >>"$keep"
+awk -F= '/^Image=/ { print $2 }' /etc/containers/systemd/*.container 2>/dev/null |
+    resolve >>"$keep"
+
+# Removal is by name, and by id only for an image that has none. Never
+# \`rmi --force\`: that deletes the containers using an image too, so a
+# container created between the listing and the removal would go with it.
+podman images --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' |
+    while read -r id ref; do
+        # \`podman images\` prints an algorithm prefix and \`image inspect\`
+        # does not, so an unnormalised comparison matches nothing — and a
+        # keep set that matches nothing removes the whole store.
+        grep -qxF "\${id#sha256:}" "$keep" && continue
+        case "$ref" in
+        *:'<none>' | '<none>:<none>') podman rmi "$id" || true ;;
+        *) podman rmi "$ref" || true ;;
+        esac
+    done
+"
+`;
+
 exports[`/usr/lib/keel/remount > renders the same bytes 1`] = `
 "mode 755
 #!/bin/sh
@@ -1532,12 +1571,12 @@ WantedBy=multi-user.target
 exports[`/usr/lib/systemd/system/keel-podman-prune.service > renders the same bytes 1`] = `
 "mode 644
 [Unit]
-Description=Reclaim dangling container layers
+Description=Reclaim unreferenced container images
 ConditionPathExists=/usr/bin/podman
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/podman image prune --force
+ExecStart=/usr/lib/keel/prune-images
 Nice=10
 IOSchedulingClass=idle
 "
@@ -1546,7 +1585,7 @@ IOSchedulingClass=idle
 exports[`/usr/lib/systemd/system/keel-podman-prune.timer > renders the same bytes 1`] = `
 "mode 644
 [Unit]
-Description=Reclaim dangling container layers weekly
+Description=Reclaim unreferenced container images weekly
 # Persistent, so it has to wait for the clock: a board with no RTC boots
 # at the image's build date, and a persistent timer that loads before
 # NTP steps the clock forward fires as if it had missed every window in

@@ -1,25 +1,77 @@
-import { dedent, file, merge, symlink, type Tree } from "./tree";
+import { dedent, file, merge, script, symlink, type Tree } from "./tree";
 
 /**
- * Dangling layers accumulate in /var, which on a bootc system is the one place
- * that is never reset by an image update — so nothing else will ever clean it.
+ * Images accumulate in /var, which on a bootc system is the one place that is
+ * never reset by an image update — so nothing else will ever clean it.
  *
- * `image prune` without `--all`: it removes untagged layers only, so a bound
- * image, or any image a quadlet references, is untouched. `--all` would delete
- * the app images out from under running services on the next restart.
+ * `podman image prune` is what this used to be, and on this fleet it reclaims
+ * nothing: it removes dangling images, and keel has none by construction. An
+ * entry's image is resolved to a digest and pulled by it, so a superseded image
+ * keeps a RepoDigest and is never dangling. A board measured 48 images, 3.0 GB,
+ * a third of it unreferenced, and zero dangling layers to find.
+ *
+ * `--all` is the other extreme, and wrong for a different reason: it keeps only
+ * what a container refers to, and a scheduled entry has no container between
+ * runs. Its image would be pruned and pulled again at the next window, over a
+ * home uplink, inside a start job.
+ *
+ * So the keep set is both, which is what the script computes.
  */
+function pruneScript(): Tree {
+  return script(
+    "/usr/lib/keel/prune-images",
+    dedent(`
+      #!/usr/bin/bash
+      # Reclaim container images this board no longer needs: everything outside
+      # the set a container refers to, running or not, plus everything a quadlet
+      # names.
+      set -euo pipefail
+
+      keep=$(mktemp)
+      trap 'rm -f "$keep"' EXIT
+
+      resolve() {
+          while read -r ref; do
+              [ -n "$ref" ] || continue
+              podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true
+          done
+      }
+
+      podman ps --all --format '{{.Image}}' | resolve >>"$keep"
+      awk -F= '/^Image=/ { print $2 }' /etc/containers/systemd/*.container 2>/dev/null |
+          resolve >>"$keep"
+
+      # Removal is by name, and by id only for an image that has none. Never
+      # \`rmi --force\`: that deletes the containers using an image too, so a
+      # container created between the listing and the removal would go with it.
+      podman images --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' |
+          while read -r id ref; do
+              # \`podman images\` prints an algorithm prefix and \`image inspect\`
+              # does not, so an unnormalised comparison matches nothing — and a
+              # keep set that matches nothing removes the whole store.
+              grep -qxF "\${id#sha256:}" "$keep" && continue
+              case "$ref" in
+              *:'<none>' | '<none>:<none>') podman rmi "$id" || true ;;
+              *) podman rmi "$ref" || true ;;
+              esac
+          done
+    `),
+  );
+}
+
 function pruneTimer(): Tree {
   return merge(
+    pruneScript(),
     file(
       "/usr/lib/systemd/system/keel-podman-prune.service",
       dedent(`
         [Unit]
-        Description=Reclaim dangling container layers
+        Description=Reclaim unreferenced container images
         ConditionPathExists=/usr/bin/podman
 
         [Service]
         Type=oneshot
-        ExecStart=/usr/bin/podman image prune --force
+        ExecStart=/usr/lib/keel/prune-images
         Nice=10
         IOSchedulingClass=idle
       `),
@@ -28,7 +80,7 @@ function pruneTimer(): Tree {
       "/usr/lib/systemd/system/keel-podman-prune.timer",
       dedent(`
         [Unit]
-        Description=Reclaim dangling container layers weekly
+        Description=Reclaim unreferenced container images weekly
         # Persistent, so it has to wait for the clock: a board with no RTC boots
         # at the image's build date, and a persistent timer that loads before
         # NTP steps the clock forward fires as if it had missed every window in

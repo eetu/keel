@@ -33,7 +33,9 @@ Environment=KANIDM_TLS_KEY=/etc/kanidm/certs/key.pem
 Environment=KANIDM_ORIGIN=https://idm.example.test
 Environment=KANIDM_DOMAIN=idm.example.test
 HealthCmd=CMD /sbin/kanidmd scripting healthcheck
-HealthInterval=5s
+HealthStartupCmd=CMD /sbin/kanidmd scripting healthcheck
+HealthStartupInterval=5s
+HealthInterval=60s
 HealthStartPeriod=10s
 Notify=healthy
 
@@ -210,7 +212,9 @@ Environment=FTLCONF_webserver_port=8080o,[::]:8080o
 Environment=FTLCONF_database_maxDBdays=7
 Environment=FTLCONF_webserver_api_password=
 HealthCmd=dig +norecurse +retry=0 @127.0.0.1 pi.hole
-HealthInterval=5s
+HealthStartupCmd=dig +norecurse +retry=0 @127.0.0.1 pi.hole
+HealthStartupInterval=5s
+HealthInterval=60s
 HealthStartPeriod=10s
 Notify=healthy
 
@@ -314,7 +318,9 @@ Volume=/etc/traefik:/etc/traefik:ro,Z
 Volume=/var/lib/traefik:/var/lib/traefik:Z
 EnvironmentFile=/etc/secrets/traefik.env
 HealthCmd=traefik healthcheck
-HealthInterval=5s
+HealthStartupCmd=traefik healthcheck
+HealthStartupInterval=5s
+HealthInterval=60s
 HealthStartPeriod=10s
 Notify=healthy
 
