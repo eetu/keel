@@ -789,8 +789,11 @@ export type ServiceSpec = {
    * is. An entry whose callers cannot wait that long stays resident.
    *
    * It is refused for a scheduled entry, which has no listener to be dialled,
-   * and for `egress: "host"`, where the application binds the advertised port
-   * itself and there is no published port to move out of the socket's way.
+   * for `egress: "host"`, where the application binds the advertised port itself
+   * and there is no published port to move out of the socket's way, and for an
+   * entry with no `healthCmd` — the proxy dials the container the moment its
+   * start job finishes, so that job has to mean "answering" rather than
+   * "running", which is the same rule the boot chain already rests on.
    */
   idleStop?: string;
   /**
@@ -1233,6 +1236,18 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
       `these run on a schedule and ask to be stopped when idle: ${named(idleScheduled)} — a job ` +
         "that runs to completion has no listener to be dialled, and its timer already starts it " +
         "exactly as often as it should run",
+    );
+  }
+  const idleUnprobed = catalog.services.filter(
+    (spec) => spec.idleStop !== undefined && spec.healthCmd === undefined,
+  );
+  if (idleUnprobed.length > 0) {
+    errors.push(
+      `these are stopped when idle and declare no health check: ${named(idleUnprobed)} — the ` +
+        "proxy in front dials the container the moment its start job finishes, and without a " +
+        "check that job finishes when the container is running rather than when the application " +
+        "is answering, so the first request after every idle period is refused by a service " +
+        "that is seconds from being ready",
     );
   }
   const idleOnHost = catalog.services.filter(

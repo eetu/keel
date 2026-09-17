@@ -641,8 +641,14 @@ if [ "$port" != "53" ]; then
     done
 fi
 
-[ "$(getsebool virt_use_samba)" = "virt_use_samba --> on" ] ||
-    setsebool -P virt_use_samba on
+# One invocation for whatever is off, because a commit costs the same
+# whether it carries one boolean or three.
+want=""
+for boolean in virt_use_samba systemd_socket_proxyd_bind_any \\
+    systemd_socket_proxyd_connect_any; do
+    [ "$(getsebool "$boolean")" = "$boolean --> on" ] || want="$want $boolean=on"
+done
+[ -z "$want" ] || setsebool -P $want
 "
 `;
 
