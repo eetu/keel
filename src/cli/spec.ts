@@ -35,7 +35,17 @@ import {
 } from "../config/spec";
 import { memoryDropInPath, serviceDropIn } from "../render/memory";
 import { NFT_SERVICES_PATH, renderNftPorts } from "../render/nftPorts";
-import { quadletPath, renderQuadlet, renderTimer, timerPath } from "../render/quadlet";
+import {
+  proxyPath,
+  quadletPath,
+  renderProxy,
+  renderQuadlet,
+  renderSocket,
+  renderTimer,
+  socketActivated,
+  socketPath,
+  timerPath,
+} from "../render/quadlet";
 
 const usage = "usage: yarn spec <name> [--profile 1g|4g|8g]";
 
@@ -99,6 +109,7 @@ const route = catalog.proxy?.role.route(spec, {
 });
 const ports = renderNftPorts(spec);
 const timer = spec.schedule === undefined ? null : renderTimer(spec);
+const activated = socketActivated(spec);
 
 const resolved = {
   name: spec.name,
@@ -202,6 +213,12 @@ const resolved = {
   })),
   quadlet: { path: quadletPath(spec), body: quadlet },
   timer: timer === null ? null : { path: timerPath(spec), body: timer },
+  // The pair in front of an entry that is stopped when idle. Printed beside the
+  // quadlet because they are where its advertised port actually lives: reading
+  // the container alone would show a service published on a number nothing
+  // dials.
+  socket: activated ? { path: socketPath(spec), body: renderSocket(spec) } : null,
+  proxy: activated ? { path: proxyPath(spec), body: renderProxy(spec) } : null,
   route:
     route === null || route === undefined
       ? null

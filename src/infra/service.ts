@@ -37,7 +37,17 @@ import {
 } from "../config/spec";
 import { type ServiceFile, type ServiceSecretFile } from "../config/types";
 import { memoryDropInPath, serviceDropIn } from "../render/memory";
-import { quadletPath, renderQuadlet, renderTimer, timerPath } from "../render/quadlet";
+import {
+  proxyPath,
+  quadletPath,
+  renderProxy,
+  renderQuadlet,
+  renderSocket,
+  renderTimer,
+  socketActivated,
+  socketPath,
+  timerPath,
+} from "../render/quadlet";
 import { MetricsAccount } from "./providers/metricsAccount";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedText } from "./providers/sealedText";
@@ -115,8 +125,9 @@ export default class Service extends pulumi.ComponentResource {
   public readonly backupPath: string | undefined;
   /**
    * The unit that carries this entry's runtime state: its own `.service` where
-   * the entry stays up, its `.timer` where the entry runs on a clock — because
-   * for a scheduled entry the clock is the thing that is either running or not.
+   * the entry stays up, its `.timer` where the entry runs on a clock, its
+   * `.socket` where it is started by a connection — in each case the thing that
+   * is either running or not, which for the last two is never the container.
    */
   public readonly unit: SystemdUnit;
 
@@ -174,6 +185,30 @@ export default class Service extends pulumi.ComponentResource {
         : new RemoteFile(
             `${spec.name}-timer`,
             { host, sshArgs, path: timerPath(spec), content: timer, mode: "644" },
+            parent,
+          );
+
+    // The two units in front of an entry that is stopped when idle: the socket
+    // that holds its advertised port from boot, and the proxy the socket
+    // activates. Plain unit files beside the timer above, for the same reason —
+    // quadlet generates container units and knows nothing about either.
+    const activated = socketActivated(spec);
+    const socket = activated ? renderSocket(spec) : undefined;
+    const proxy = activated ? renderProxy(spec) : undefined;
+    const socketFile =
+      socket === undefined
+        ? undefined
+        : new RemoteFile(
+            `${spec.name}-socket`,
+            { host, sshArgs, path: socketPath(spec), content: socket, mode: "644" },
+            parent,
+          );
+    const proxyFile =
+      proxy === undefined
+        ? undefined
+        : new RemoteFile(
+            `${spec.name}-proxy`,
+            { host, sshArgs, path: proxyPath(spec), content: proxy, mode: "644" },
             parent,
           );
 
@@ -359,6 +394,8 @@ export default class Service extends pulumi.ComponentResource {
       ...(secretFile ? [secretFile] : []),
       ...(metricsFile ? [metricsFile] : []),
       ...(timerFile ? [timerFile] : []),
+      ...(socketFile ? [socketFile] : []),
+      ...(proxyFile ? [proxyFile] : []),
       ...generated.map((entry) => entry.file),
     ];
     // Empty for a service with no generated file, which is every service but
@@ -385,6 +422,7 @@ export default class Service extends pulumi.ComponentResource {
             body,
             memory,
             ...(timer === undefined ? [] : [timer]),
+            ...(socket === undefined ? [] : [socket, proxy!]),
             ...restarting,
             secretHash + accountHash + fileHash,
           ]
@@ -407,27 +445,61 @@ export default class Service extends pulumi.ComponentResource {
     // `spec.name` names whichever of the two carries runtime state, the same as
     // it does for an entry that stays up and the same as the backup's timers do,
     // so nothing about an existing service's state identity moves.
-    const oneShot =
-      spec.schedule === undefined
-        ? undefined
-        : new SystemdUnit(
-            `${spec.name}-oneshot`,
-            {
-              host,
-              sshArgs,
-              unit: `${spec.name}.service`,
-              quadlet: true,
-              action: "load",
-              trigger,
-            },
-            { ...parent, dependsOn: deps },
-          );
+    //
+    // An entry stopped when idle is three, split the same way and for the same
+    // reason: the container is `action: "load"`, because being stopped is its
+    // steady state and a deploy that started it would be the one thing socket
+    // activation exists to avoid; the proxy is loaded too, since what starts it
+    // is a connection; and the socket is the unit with runtime state, because
+    // holding the port is what this entry is either doing or not.
+    const loaded =
+      spec.schedule === undefined && !activated
+        ? []
+        : [
+            new SystemdUnit(
+              `${spec.name}-oneshot`,
+              {
+                host,
+                sshArgs,
+                unit: `${spec.name}.service`,
+                quadlet: true,
+                action: "load",
+                trigger,
+              },
+              { ...parent, dependsOn: deps },
+            ),
+            ...(activated
+              ? [
+                  new SystemdUnit(
+                    `${spec.name}-proxy-unit`,
+                    {
+                      host,
+                      sshArgs,
+                      unit: `${spec.name}-proxy.service`,
+                      quadlet: false,
+                      action: "load",
+                      trigger,
+                    },
+                    { ...parent, dependsOn: deps },
+                  ),
+                ]
+              : []),
+          ];
+    const runtime = activated
+      ? `${spec.name}.socket`
+      : spec.schedule === undefined
+        ? `${spec.name}.service`
+        : `${spec.name}.timer`;
     this.unit = new SystemdUnit(
       spec.name,
-      oneShot === undefined
-        ? { host, sshArgs, unit: `${spec.name}.service`, quadlet: true, trigger }
-        : { host, sshArgs, unit: `${spec.name}.timer`, quadlet: false, trigger },
-      { ...parent, dependsOn: oneShot === undefined ? deps : [...deps, oneShot] },
+      {
+        host,
+        sshArgs,
+        unit: runtime,
+        quadlet: runtime === `${spec.name}.service`,
+        trigger,
+      },
+      { ...parent, dependsOn: [...deps, ...loaded] },
     );
 
     // The same function the backup's own path list is derived from, so the two

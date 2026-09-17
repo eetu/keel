@@ -39,6 +39,30 @@ export const NETWORK_INTERFACES = {
  * the port to the LAN and the mesh is the filter, which is where every other
  * source-address decision on this fleet already lives.
  */
+/**
+ * How far a socket-activated entry's container is published from the port it
+ * advertises.
+ *
+ * The socket holds the advertised port from boot — that is the whole point, so
+ * that nothing dialling the service has to know it is not resident — which
+ * leaves the container needing a port of its own for the proxy to forward to.
+ * A fixed offset rather than a second number on the entry: the pair is one fact
+ * and stating it twice is a way for the two halves to disagree. The range it
+ * lands in is far above anything a service asks for, and `tests/ingress.test.ts`
+ * holds the derived set clear of the declared one rather than trusting that.
+ */
+const BACKEND_PORT_OFFSET = 30000;
+
+/** Whether a connection starts this entry rather than finding it already up. */
+export function socketActivated(spec: ServiceSpec): boolean {
+  return spec.idleStop !== undefined && spec.schedule === undefined;
+}
+
+/** The port the container itself is published on, behind the socket. */
+export function backendPort(spec: ServiceSpec): number {
+  return spec.port + BACKEND_PORT_OFFSET;
+}
+
 export function publishAddress(spec: ServiceSpec): string {
   const admitted = [
     ...(spec.ingress?.lanTcp ?? []),
@@ -212,7 +236,14 @@ export function renderQuadlet(
           // Nothing to publish for a job that runs to completion: its port is
           // nominal, no process ever binds it, and a forward into a namespace
           // that exists for a few seconds a day is a rule with nothing behind it.
-          ...(scheduled ? [] : [`PublishPort=${publishAddress(spec)}:${spec.port}:${spec.port}`]),
+          // A socket-activated entry is published on the derived port instead:
+          // the socket unit holds the advertised one from boot, and two
+          // listeners on one address is the second of them failing to bind.
+          ...(scheduled
+            ? []
+            : [
+                `PublishPort=${publishAddress(spec)}:${socketActivated(spec) ? backendPort(spec) : spec.port}:${spec.port}`,
+              ]),
         ]),
     ...(spec.mounts ?? []).map((mount) => `Volume=${mount}`),
     // systemd splits an unquoted Environment= value on whitespace, so a value
@@ -311,6 +342,12 @@ export function renderQuadlet(
     `Description=${spec.description}`,
     `After=${after.join(" ")}`,
     `Wants=${["network-online.target", ...wants].join(" ")}`,
+    // What makes the proxy's exit reach the container. `systemd-socket-proxyd`
+    // stops itself once the idle timespan passes; nothing else requires this
+    // unit, so systemd stops it too. Without the line the container would start
+    // once on the first connection and stay up for the life of the boot, which
+    // is every cost of socket activation and none of its point.
+    ...(socketActivated(spec) ? ["StopWhenUnneeded=yes"] : []),
     "",
     "[Container]",
     ...container,
@@ -321,7 +358,12 @@ export function renderQuadlet(
     // schedule and a boot: `WantedBy=multi-user.target` is what makes the
     // generator want this unit at every startup, which for a one-shot is a run
     // on every reboot. What starts it is the timer beside it and nothing else.
-    ...(scheduled ? [] : ["", "[Install]", "WantedBy=multi-user.target"]),
+    //
+    // A socket-activated entry omits it for the same reason and a different
+    // one: wanted at startup it would be resident from the first boot and the
+    // socket in front of it would never activate anything. What starts it is
+    // the proxy that requires it, and what starts the proxy is a connection.
+    ...(scheduled || socketActivated(spec) ? [] : ["", "[Install]", "WantedBy=multi-user.target"]),
     "",
   ].join("\n");
 }
@@ -383,5 +425,76 @@ export function renderTimer(spec: ServiceSpec): string {
 
     [Install]
     WantedBy=timers.target
+  `);
+}
+
+/** Where a socket-activated entry's socket lands, beside every other unit. */
+export function socketPath(spec: ServiceSpec): string {
+  return `/etc/systemd/system/${spec.name}.socket`;
+}
+
+/** And its proxy, the unit the socket actually activates. */
+export function proxyPath(spec: ServiceSpec): string {
+  return `/etc/systemd/system/${spec.name}-proxy.service`;
+}
+
+/**
+ * The socket that holds a socket-activated entry's advertised port.
+ *
+ * Enabled into `sockets.target`, which a boot reaches long before
+ * `multi-user.target` — so the port is listening before any consumer's own
+ * container is started, and nothing needs an ordering edge naming this unit.
+ *
+ * `Service=` is the load-bearing line. A socket activates the service of its own
+ * name by default, and here that would be the container — which cannot take a
+ * passed file descriptor and would leave the socket activating something that
+ * never accepts the connection. Naming the proxy sends the activation where the
+ * forwarding is, and leaves the socket named after the entry, which is what
+ * `systemctl status <name>.socket` and the alert poller both read.
+ */
+export function renderSocket(spec: ServiceSpec): string {
+  if (!socketActivated(spec)) {
+    throw new Error(`${spec.name} is not socket-activated`);
+  }
+  return dedent(`
+    [Unit]
+    Description=${spec.description}, listening
+
+    [Socket]
+    ListenStream=127.0.0.1:${spec.port}
+    Service=${spec.name}-proxy.service
+
+    [Install]
+    WantedBy=sockets.target
+  `);
+}
+
+/**
+ * The proxy between that socket and the container.
+ *
+ * `Requires=` and not `Wants=`: a forward to a container that failed to start is
+ * a connection accepted and then dropped, which reads to the client as the
+ * service answering and hanging up. Requiring it makes the proxy fail with it,
+ * so the client gets a refusal and the unit that failed is the one named in the
+ * alert.
+ *
+ * `--exit-idle-time` is the whole of the stop half. The proxy exits when the
+ * timespan passes with nothing connected, and the container's
+ * `StopWhenUnneeded=yes` follows it down.
+ */
+export function renderProxy(spec: ServiceSpec): string {
+  if (!socketActivated(spec)) {
+    throw new Error(`${spec.name} is not socket-activated`);
+  }
+  return dedent(`
+    [Unit]
+    Description=${spec.description}, on demand
+    Requires=${spec.name}.service
+    After=${spec.name}.service
+    Requires=${spec.name}.socket
+    After=${spec.name}.socket
+
+    [Service]
+    ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=${spec.idleStop} 127.0.0.1:${backendPort(spec)}
   `);
 }

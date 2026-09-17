@@ -17,6 +17,7 @@ import { PROFILES, selectProfile } from "../src/config/profiles";
 import { EXAMPLE_SERVICES, SERVICES } from "../src/config/services";
 import {
   catalogOf,
+  deploymentGaps,
   type Ingress,
   isSecretsPath,
   metricsSecretsPath,
@@ -32,11 +33,17 @@ import {
 import { type ServiceSecretFile } from "../src/config/types";
 import { publicProxyIngress } from "../src/render/nftPorts";
 import {
+  backendPort,
   NETWORK_INTERFACES,
   NETWORK_NAMES,
+  proxyPath,
   renderNetworks,
+  renderProxy,
   renderQuadlet,
+  renderSocket,
   renderTimer,
+  socketActivated,
+  socketPath,
   timerPath,
 } from "../src/render/quadlet";
 import { routersOf } from "./routeYaml";
@@ -101,6 +108,12 @@ function portConflicts(specs: readonly ServiceSpec[]): readonly string[] {
   ];
   for (const spec of specs) {
     if (spec.schedule === undefined) claim("tcp", spec.port, spec.name);
+    // A socket-activated entry binds two: the socket holds the advertised port
+    // and the container is published on the derived one. Both are the host's,
+    // and the derived one is the half nobody writes down — so it is claimed
+    // here, where a catalog that grew into the offset range would be a named
+    // collision rather than a container that fails to publish.
+    if (socketActivated(spec)) claim("tcp", backendPort(spec), spec.name);
     for (const [key, proto] of ingressSets) {
       for (const port of spec.ingress?.[key] ?? []) claim(proto, port, spec.name);
     }
@@ -150,7 +163,10 @@ describe.each(SERVICES)("$name quadlet", (spec) => {
       ...(spec.ingress?.worldTcp ?? []),
     ]);
     const address = admitted.has(spec.port) ? "0.0.0.0" : "127.0.0.1";
-    expect(quadlet).toContain(`PublishPort=${address}:${spec.port}:${spec.port}`);
+    // An entry stopped when idle leaves its advertised port to the socket in
+    // front of it and is published on the derived one instead.
+    const host = socketActivated(spec) ? backendPort(spec) : spec.port;
+    expect(quadlet).toContain(`PublishPort=${address}:${host}:${spec.port}`);
   });
 
   it("places itself in a slice but sets no memory cap", () => {
@@ -248,6 +264,73 @@ describe("an entry something off the board dials", () => {
     expect(renderQuadlet(app({ ingress: { lanUdp: [9200] } }))).toContain(
       "PublishPort=127.0.0.1:9200:9200",
     );
+  });
+});
+
+describe("an entry that is stopped when idle", () => {
+  const idle = (extra: Partial<ServiceSpec> = {}): ServiceSpec => ({
+    name: "sidecar",
+    description: "A sidecar dialled now and then",
+    image: `example.test/sidecar@sha256:${"0".repeat(64)}`,
+    port: 3004,
+    memory: { max: 128, tier: "apps" },
+    subdomain: null,
+    auth: "open",
+    idleStop: "15min",
+    ...extra,
+  });
+
+  it("leaves the advertised port to the socket and publishes elsewhere", () => {
+    // The point of the whole shape: everything that dials this service keeps
+    // dialling the port it always did, and never learns it is not resident.
+    const quadlet = renderQuadlet(idle());
+    expect(quadlet).toContain(`PublishPort=127.0.0.1:${backendPort(idle())}:3004`);
+    expect(quadlet).not.toContain("PublishPort=127.0.0.1:3004:3004");
+    expect(renderSocket(idle())).toContain("ListenStream=127.0.0.1:3004");
+  });
+
+  it("is wanted by no target, so a boot does not make it resident", () => {
+    // `WantedBy=multi-user.target` would start it at every boot, and a socket in
+    // front of a service that is already running activates nothing — every cost
+    // of the mechanism and none of its effect.
+    const quadlet = renderQuadlet(idle());
+    expect(quadlet).not.toContain("[Install]");
+    expect(quadlet).not.toContain("WantedBy=");
+    expect(renderSocket(idle())).toContain("WantedBy=sockets.target");
+  });
+
+  it("stops when the proxy that needs it exits", () => {
+    // The proxy exits on its idle timer; this is what carries that down to the
+    // container. Without it the first connection of the boot would leave the
+    // service resident until the next reboot.
+    expect(renderQuadlet(idle())).toContain("StopWhenUnneeded=yes");
+    expect(renderProxy(idle())).toContain("--exit-idle-time=15min");
+  });
+
+  it("activates the proxy and never the container", () => {
+    // A socket activates the service of its own name by default, and that unit
+    // here is the container — which takes no passed descriptor, so the socket
+    // would activate something that never accepts the connection.
+    expect(renderSocket(idle())).toContain("Service=sidecar-proxy.service");
+    expect(renderProxy(idle())).toContain(`127.0.0.1:${backendPort(idle())}`);
+    // `Requires=`, so a container that failed to start refuses the connection
+    // rather than accepting it and dropping it.
+    expect(renderProxy(idle())).toContain("Requires=sidecar.service");
+  });
+
+  it("puts both units where the deploy owns them", () => {
+    expect(socketPath(idle())).toBe("/etc/systemd/system/sidecar.socket");
+    expect(proxyPath(idle())).toBe("/etc/systemd/system/sidecar-proxy.service");
+  });
+
+  it("is refused on a schedule and on the host's network", () => {
+    // A job has no listener to be dialled, and under host networking the
+    // application binds the advertised port itself — so the socket would be
+    // trying to bind the port of the service it exists to start.
+    const gaps = (spec: ServiceSpec) => deploymentGaps(catalogOf([spec])).errors.join(" ");
+    expect(gaps(idle({ schedule: "*-*-* 04:00 UTC" }))).toContain("no listener to be dialled");
+    expect(gaps(idle({ egress: "host" }))).toContain("binds the advertised port itself");
+    expect(socketActivated(idle({ schedule: "*-*-* 04:00 UTC" }))).toBe(false);
   });
 });
 
