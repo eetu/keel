@@ -27,7 +27,9 @@ function slices(): Tree {
       // No [Slice] section: the tier is protected by the `MemoryLow` its profile
       // drop-in carries, and by systemd-oomd having no policy for it — oomd acts
       // on a cgroup only where `ManagedOOM*` says so, which is the apps slice
-      // and nowhere else.
+      // and nowhere else. Its CPU share is protected the same way, by the apps'
+      // own weight rather than by a number here: a weight raised on this side
+      // would be taken from system.slice, where sshd and the resolver live.
       dedent(`
         [Unit]
         Description=keel core services (resolver, proxy, identity)
@@ -46,6 +48,29 @@ function slices(): Tree {
         # before the LAN loses its resolver.
         ManagedOOMMemoryPressure=kill
         ManagedOOMMemoryPressureLimit=60%
+        # CPU pressure is resolved here too, and only the apps' side of it moves.
+        # Every quadlet is wanted by multi-user.target, so a boot starts two
+        # dozen containers at once and the board spends minutes at a load average
+        # in the twenties — during which the resolver and the proxy are competing
+        # with everything that merely wants to be running eventually.
+        #
+        # Lowering this rather than raising the core's is the whole of the
+        # decision. The three slices under the root are weighted against each
+        # other, and system.slice is not a bystander: sshd is in it, so is
+        # unbound, so is the mesh agent, and so is every transient
+        # podman healthcheck run. Raising keel-core would take shares from the
+        # recovery path and from the resolver that actually answers :53. Halving
+        # the apps' weight leaves system and core at their defaults, holding
+        # roughly 40% each under contention against the apps' 20.
+        #
+        # A weight and not a quota: with the core tier idle the apps have the
+        # whole board, which is every minute that is not a boot.
+        #
+        # No IOWeight beside it, which is where the boot actually hurts more:
+        # cgroup v2's io.weight is implemented by BFQ and by io.cost, and an SD
+        # card on mq-deadline has neither — the line would render, apply cleanly
+        # and do nothing.
+        CPUWeight=50
       `),
     ),
   );

@@ -121,6 +121,21 @@ describe("rendered memory tree", () => {
     }
   });
 
+  it("weights the apps tier down and leaves every other slice alone", () => {
+    // A boot starts two dozen containers at once, and the resolver and the proxy
+    // compete with all of them. The apps' weight is the only one stated: raising
+    // the core's would take the same shares from system.slice, where sshd and
+    // unbound are — so the tier that must answer would win against the apps and
+    // lose against the path back into the board.
+    const core = tree.get("/usr/lib/systemd/system/keel-core.slice");
+    const apps = tree.get("/usr/lib/systemd/system/keel-apps.slice");
+    expect(apps?.content).toContain("CPUWeight=50");
+    expect(core?.content).not.toContain("CPUWeight=");
+    // A weight and not a quota: nothing here may cap the tier outright, or an
+    // idle core tier would leave the board's CPU unused.
+    expect(apps?.content).not.toContain("CPUQuota=");
+  });
+
   it("caps the services the image itself runs", () => {
     for (const service of Object.keys(IMAGE_SERVICES)) {
       const entry = tree.get(`/usr/lib/systemd/system/${service}.service.d/50-keel-memory.conf`);
