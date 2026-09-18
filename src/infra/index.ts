@@ -23,6 +23,7 @@ import * as cloudflare from "@pulumi/cloudflare";
 import * as pulumi from "@pulumi/pulumi";
 
 import { BACKUP_SECRET_ENV, BACKUP_VAULT_ITEM, RESTIC_IMAGE } from "../config/backup";
+import { CLOUDFLARE_FIELD, CLOUDFLARE_ITEM } from "../config/cloudflare";
 import { INSTALLATION } from "../config/installation";
 import { REMOTES, SERVICES } from "../config/services";
 import {
@@ -38,9 +39,11 @@ import {
   secretFields,
   secretsPath,
   serviceOrigin,
+  wanRecords,
 } from "../config/spec";
 import { ALERT_CONFIG_PATH, renderAlertConfig } from "../render/alert";
 import { BACKUP_SECRETS_PATH, backupSet, renderBackupConfig } from "../render/backup";
+import { DDNS_CONFIG_PATH, DDNS_SECRETS_PATH, renderDdnsConfig } from "../render/ddns";
 import { HOSTS_CONFIG_PATH, KEEL_HOSTS_SERVICE, renderHostsConfig } from "../render/hosts";
 import { MESH_INTERFACE } from "../render/mesh";
 import { isIpAddress, mountedShares } from "../render/mount";
@@ -55,6 +58,7 @@ import { ImageDigest } from "./providers/imageDigest";
 import { BootstrapAccount, BootstrapConnector } from "./providers/netbirdAccount";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedEnv } from "./providers/sealedEnv";
+import { SecretFile } from "./providers/secretFile";
 import { SystemdUnit } from "./providers/systemdUnit";
 import Service from "./service";
 
@@ -575,8 +579,9 @@ for (const remote of catalog.remotes) {
  * No `dependsOn`: a DNS record needs nothing running to be correct, the same
  * as a route file.
  */
-const publicNames = publicRecords(catalog, INSTALLATION.network);
-if (publicNames.length > 0) {
+const publicNames = publicRecords(catalog, INSTALLATION.network, INSTALLATION.publicHosts);
+const wanNames = wanRecords(catalog, INSTALLATION.network, INSTALLATION.publicHosts);
+if (publicNames.length > 0 || wanNames.length > 0) {
   const { zoneId } = cloudflare.getZoneOutput({
     filter: { name: INSTALLATION.network.domain },
   });
@@ -589,6 +594,46 @@ if (publicNames.length > 0) {
       ttl: 120,
       proxied: false,
       comment: "keel",
+    });
+  }
+
+  /**
+   * The WAN-facing half, handed to the board rather than declared here.
+   *
+   * Their content is the house's public address, which the ISP changes without
+   * anybody deploying — so a record written by this program would be correct
+   * until it silently was not, and the moment it went stale is the moment
+   * somebody away from home needed it. `keel-ddns.timer` keeps them true every
+   * quarter hour; this writes down which names it owns and hands over the
+   * credential. One owner per record: the LAN-pointing ones above are this
+   * program's, these are the board's, and neither writes the other's.
+   */
+  new RemoteFile("keel-ddns-config", {
+    host: sshTarget,
+    sshArgs,
+    path: DDNS_CONFIG_PATH,
+    content: zoneId.apply((zone) => renderDdnsConfig(zone, wanNames)),
+    mode: "644",
+  });
+  if (wanNames.length > 0) {
+    if (ageRecipient === undefined) {
+      throw new Error(
+        `${sshTarget} serves a WAN-facing name but has no ageRecipient — ` +
+          "generate an identity on the host and record its public half",
+      );
+    }
+    const ddnsToken = new SealedEnv("keel-ddns-env", {
+      vault,
+      item: CLOUDFLARE_ITEM,
+      fields: { CF_TOKEN: CLOUDFLARE_FIELD },
+      ageRecipient,
+    });
+    new SecretFile("keel-ddns-secret", {
+      host: sshTarget,
+      sshArgs,
+      path: `${DDNS_SECRETS_PATH}.age`,
+      ciphertext: ddnsToken.ciphertext,
+      plaintextHash: ddnsToken.plaintextHash,
     });
   }
 }

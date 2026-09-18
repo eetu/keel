@@ -2,6 +2,7 @@ import { REQUIRED_UNITS } from "../config/versions";
 import { KEEL_ALERT_TIMER, renderAlert } from "./alert";
 import { renderBase, renderPresets } from "./base";
 import { renderContainers } from "./containers";
+import { KEEL_DDNS_TIMER, renderDdns } from "./ddns";
 import { renderDns } from "./dns";
 import { renderFirstboot } from "./firstboot";
 import { renderFlightRecorder } from "./flightrecorder";
@@ -55,6 +56,10 @@ const UNITS = [
   // Retries every failed network mount and starts what requires it, every five
   // minutes — systemd's `Restart=` has no counterpart for a mount.
   KEEL_REMOUNT_TIMER,
+  // Keeps the WAN-facing records pointing at this house, every quarter hour.
+  // Enabled on every board because there is one image; a board whose deploy
+  // named no such host reads an empty config and does nothing.
+  KEEL_DDNS_TIMER,
   // The mesh agent's daemon. Enabled on every board because there is one image;
   // one that was never enrolled idles, holding no interface and forwarding
   // nothing. Not a required unit: a board that is not a peer is a board doing
@@ -137,6 +142,7 @@ export function renderAll(): RenderResult {
       renderHosts(),
       renderMesh(),
       renderAlert(),
+      renderDdns(),
       renderRemount(),
       renderSelinux(),
       renderNftables(),

@@ -27,6 +27,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { CLOUDFLARE_FIELD, CLOUDFLARE_ITEM } from "../src/config/cloudflare";
 import { INSTALLATION } from "../src/config/installation";
 import { readField } from "../src/infra/vault";
 
@@ -34,8 +35,6 @@ import { readField } from "../src/infra/vault";
  * The `cloudflare` item is a login whose password field is the API token — the
  * same field the proxy's DNS-01 challenge reads, so one item serves both.
  */
-const CLOUDFLARE_ITEM = "cloudflare";
-const CLOUDFLARE_FIELD = "password";
 
 const repo = new URL("..", import.meta.url);
 

@@ -659,6 +659,154 @@ done
 "
 `;
 
+exports[`/usr/lib/keel/ddns > renders the same bytes 1`] = `
+"mode 755
+#!/usr/bin/env python3
+"""Keep the WAN-facing records in /etc/keel/ddns.conf pointing at this house.
+
+Quiet when nothing changed: a line is printed only when a record is
+written, so the journal holds the history of the address rather than a
+tick every quarter hour. Exits non-zero when the zone refuses a write,
+which is a credential or a permission problem and wants a person — the
+poller lists the failed unit. A lookup that simply could not reach the
+internet is not that, and leaves the next tick to try again.
+"""
+
+import json
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+CONFIG = "/etc/keel/ddns.conf"
+API = "https://api.cloudflare.com/client/v4"
+# The overlay's own interface. Its addresses are this board's too, and
+# publishing one would point the world at an address only the mesh can
+# reach — which is the failure this file exists to prevent, inverted.
+MESH = "wt0"
+TTL = 120
+
+
+def settings(path):
+    found = {}
+    try:
+        with open(path) as handle:
+            for line in handle:
+                key, _, value = line.strip().partition("=")
+                if key and not key.startswith("#"):
+                    found[key] = value
+    except FileNotFoundError:
+        pass
+    return found
+
+
+def wan_v4():
+    """What the internet sees. Behind NAT the board cannot know this."""
+    for url in ("https://api4.ipify.org", "https://ipv4.icanhazip.com"):
+        try:
+            with urllib.request.urlopen(url, timeout=15) as answer:
+                text = answer.read().decode().strip()
+            if re.match(r"^[0-9.]+$", text):
+                return text
+        except OSError:
+            continue
+    return None
+
+
+def wan_v6():
+    """This board's own global address, read from the interface.
+
+    Excludes the mesh's interface and unique-local addresses: both are
+    global in form and reachable only from inside, so either would be a
+    AAAA record that answers and then refuses every connection.
+    """
+    out = subprocess.run(
+        ["ip", "-6", "-o", "addr", "show", "scope", "global"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 4 or parts[1] == MESH:
+            continue
+        address = parts[3].split("/")[0]
+        # fc00::/7 is unique-local; "deprecated" is an address on its way
+        # out, which a record should never be pointed at.
+        if address.lower().startswith(("fc", "fd")) or "deprecated" in line:
+            continue
+        return address
+    return None
+
+
+def call(token, path, method="GET", body=None):
+    request = urllib.request.Request(
+        API + path,
+        data=None if body is None else json.dumps(body).encode(),
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=30) as answer:
+        return json.loads(answer.read())
+
+
+def converge(token, zone, name, kind, address):
+    """One record, written only when it does not already say this."""
+    found = call(token, "/zones/%s/dns_records?name=%s&type=%s" % (zone, name, kind))
+    records = found.get("result") or []
+    body = {"type": kind, "name": name, "content": address, "ttl": TTL, "proxied": False,
+            "comment": "keel-ddns"}
+    if not records:
+        call(token, "/zones/%s/dns_records" % zone, "POST", body)
+        print("keel-ddns: created %s %s -> %s" % (kind, name, address))
+        return
+    record = records[0]
+    if record.get("content") == address:
+        return
+    call(token, "/zones/%s/dns_records/%s" % (zone, record["id"]), "PUT", body)
+    print("keel-ddns: %s %s %s -> %s" % (kind, name, record.get("content"), address))
+
+
+def main():
+    config = settings(CONFIG)
+    names = [name for name in config.get("NAMES", "").split(" ") if name]
+    zone = config.get("ZONE_ID", "")
+    token = settings("/etc/secrets/ddns.env").get("CF_TOKEN", "")
+    if not names or not zone:
+        return 0
+    if not token:
+        print("keel-ddns: no CF_TOKEN in /etc/secrets/ddns.env", file=sys.stderr)
+        return 1
+
+    addresses = [("A", wan_v4()), ("AAAA", wan_v6())]
+    if all(address is None for _kind, address in addresses):
+        print("keel-ddns: could not determine any address; leaving records alone",
+              file=sys.stderr)
+        return 0
+
+    for name in names:
+        for kind, address in addresses:
+            if address is None:
+                continue
+            try:
+                converge(token, zone, name, kind, address)
+            except urllib.error.HTTPError as error:
+                print("keel-ddns: %s %s refused: HTTP %d" % (kind, name, error.code),
+                      file=sys.stderr)
+                return 1
+            except OSError as error:
+                print("keel-ddns: %s %s unreachable: %s" % (kind, name, error),
+                      file=sys.stderr)
+                return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"
+`;
+
 exports[`/usr/lib/keel/decrypt-secrets > renders the same bytes 1`] = `
 "mode 755
 #!/bin/sh
@@ -1432,6 +1580,38 @@ exports[`/usr/lib/systemd/system/keel-core.slice > renders the same bytes 1`] = 
 [Unit]
 Description=keel core services (resolver, proxy, identity)
 Before=slices.target
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-ddns.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Point this house's WAN-facing records at its current address
+After=network-online.target time-sync.target keel-secrets.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# A board with no sealed credential yet still runs and says nothing: the
+# dash is what keeps a first boot from failing on a file the deploy has
+# not written.
+EnvironmentFile=-/etc/secrets/ddns.env
+ExecStart=/usr/lib/keel/ddns
+"
+`;
+
+exports[`/usr/lib/systemd/system/keel-ddns.timer > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Refresh the WAN-facing records every quarter hour
+After=time-sync.target
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target
 "
 `;
 
