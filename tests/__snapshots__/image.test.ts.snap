@@ -1953,6 +1953,7 @@ enable keel-hosts.service
 enable keel-hosts.timer
 enable keel-alert.timer
 enable keel-remount.timer
+enable keel-ddns.timer
 enable keel-mesh.service
 enable keel-podman-prune.timer
 enable greenboot-healthcheck.service
