@@ -169,6 +169,23 @@ describe.each(SERVICES)("$name quadlet", (spec) => {
     expect(quadlet).toContain(`PublishPort=${address}:${host}:${spec.port}`);
   });
 
+  it("backs off when it cannot start, and never gives up", () => {
+    if (spec.schedule !== undefined) return;
+    // A container that panics on startup is retried forever, and on this board
+    // each retry is a container start. At a flat ten seconds that was measured
+    // as enough sustained I/O to starve the resolver and the proxy, and to push
+    // a statfs on a healthy CIFS mount past the ten seconds that makes the
+    // remount timer declare it stale — so one application's bad build restarted
+    // the mounts and everything requiring them.
+    expect(quadlet).toContain("RestartSec=10");
+    expect(quadlet).toContain("RestartSteps=5");
+    expect(quadlet).toContain("RestartMaxDelaySec=300");
+    // And no start limit: giving up entirely would leave a service down after a
+    // dependency blinked, which is the failure this board cannot page anybody
+    // about at four in the morning.
+    expect(quadlet).not.toContain("StartLimitBurst=");
+  });
+
   it("places itself in a slice but sets no memory cap", () => {
     // Exactly one mechanism owns the numbers: the drop-in written beside it.
     expect(quadlet).toMatch(/^Slice=keel-(core|apps)\.slice$/m);
