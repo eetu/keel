@@ -957,18 +957,49 @@ export function vhosts(catalog: Catalog): readonly { name: string; subdomain: st
 export function publicRecords(
   catalog: Catalog,
   network: Network,
+  publicHosts: readonly string[] = [],
 ): readonly { name: string; fqdn: string; content: string }[] {
   const opted = new Set([
     ...catalog.services.filter((spec) => spec.publicDns === true).map((spec) => spec.name),
     ...catalog.remotes.filter((remote) => remote.publicDns === true).map((remote) => remote.name),
   ]);
+  const wan = new Set(publicHosts);
   return vhosts(catalog)
-    .filter((vhost) => opted.has(vhost.name))
+    .filter((vhost) => opted.has(vhost.name) && !wan.has(vhost.subdomain))
     .map((vhost) => ({
       name: vhost.name,
       fqdn: `${vhost.subdomain}.${network.domain}`,
       content: network.lanAddress,
     }));
+}
+
+/**
+ * The public names that must answer with the WAN address instead, which is the
+ * set `publicHosts` already describes.
+ *
+ * It is the same declaration that opens 443 to the world in `publicProxyIngress`
+ * and for the same reason: a device that has not joined the mesh reaches these
+ * over the internet, and an RFC1918 answer strands it. Every *other* public name
+ * keeps pointing at the LAN address, because what resolves it is a peer that
+ * already has a route there.
+ *
+ * Only the names, not their content: what the address *is* changes without
+ * anybody deploying, so these records are maintained by the board rather than
+ * declared here. This is the list it is given.
+ */
+export function wanRecords(
+  catalog: Catalog,
+  network: Network,
+  publicHosts: readonly string[],
+): readonly string[] {
+  const opted = new Set([
+    ...catalog.services.filter((spec) => spec.publicDns === true).map((spec) => spec.name),
+    ...catalog.remotes.filter((remote) => remote.publicDns === true).map((remote) => remote.name),
+  ]);
+  const wan = new Set(publicHosts);
+  return vhosts(catalog)
+    .filter((vhost) => opted.has(vhost.name) && wan.has(vhost.subdomain))
+    .map((vhost) => `${vhost.subdomain}.${network.domain}`);
 }
 
 /**
