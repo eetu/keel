@@ -792,7 +792,23 @@ def main():
             try:
                 converge(token, zone, name, kind, address)
             except urllib.error.HTTPError as error:
-                print("keel-ddns: %s %s refused: HTTP %d" % (kind, name, error.code),
+                # The zone's own message, not just the status. A bare 400
+                # says a write was refused and nothing about why — and the
+                # answers differ entirely: a token without edit rights, a
+                # name that is not in this zone, or a second record of the
+                # same type already holding the address being written.
+                # That last one happens on the very first run, while the
+                # deploy is still deleting the LAN-pointing record this
+                # name used to carry.
+                try:
+                    detail = json.loads(error.read())
+                    reason = "; ".join(
+                        item.get("message", "") for item in detail.get("errors") or []
+                    )
+                except (ValueError, OSError):
+                    reason = ""
+                print("keel-ddns: %s %s refused: HTTP %d %s"
+                      % (kind, name, error.code, reason or "(no message)"),
                       file=sys.stderr)
                 return 1
             except OSError as error:

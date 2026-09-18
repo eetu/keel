@@ -73,6 +73,41 @@ if (warm.status !== 0) {
   process.exit(warm.status ?? 1);
 }
 
+/**
+ * One ssh connection before Pulumi opens its own, for the same reason the vault
+ * session is warmed above: what follows is concurrent, and the first of many
+ * simultaneous attempts is the one that pays.
+ *
+ * Every device resource reaches the board over ssh and a `SystemdUnit` read
+ * opens two sessions, so a refresh of this stack is a few hundred connections
+ * inside a minute. The ssh_config multiplexes them — but only onto a master that
+ * already exists, and the first connections race to become it. Measured on a
+ * board with nothing else to do: without a warm master the refresh alone drove
+ * the load average past ten and sshd began refusing connections
+ * (`MaxStartups`), which `run()` retries, which is more connections; with one,
+ * the same refresh stayed under two. The failure is self-feeding and it reads
+ * as the board being broken rather than as a client that forgot to multiplex.
+ *
+ * Best effort by design. A stack that names no reachable host, a `sshTarget`
+ * pointing somewhere else, an agent that will not sign — none of those are
+ * reasons to refuse to run, because Pulumi will report them far better than a
+ * guess here would. What this buys is the common case costing one handshake.
+ */
+function warmSshMaster(argv: readonly string[]): void {
+  const index = argv.findIndex((arg) => arg === "-s" || arg === "--stack");
+  const stack = index === -1 ? undefined : argv[index + 1];
+  if (stack === undefined || stack.startsWith("-")) return;
+  // `-f` backgrounds it and `-N` asks for no command, so it is a master and
+  // nothing else; ControlPersist in the ssh_config decides how long it outlives
+  // the deploy. BatchMode so a host needing a passphrase fails here in a second
+  // rather than hanging a script nobody is watching.
+  spawnSync("ssh", ["-fN", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", stack], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+}
+
+warmSshMaster(process.argv.slice(2));
+
 const token = await readField(INSTALLATION.vault, CLOUDFLARE_ITEM, CLOUDFLARE_FIELD);
 if (token === "") {
   console.error(`${CLOUDFLARE_ITEM}/${CLOUDFLARE_FIELD} is empty or unreadable`);
