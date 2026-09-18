@@ -43,7 +43,13 @@ export function renderNetwork(): Tree {
     // one LAN — where being predictable is the entire point.
     file(
       "/etc/NetworkManager/conf.d/10-keel-ipv6.conf",
-      "[connection]\nipv6.addr-gen-mode=eui64\n",
+      // `0` and not `eui64`. A connection default in `conf.d` is parsed
+      // differently from the same property on a profile: `nmcli` takes the
+      // name, this file takes the enum's number, and the name here is accepted
+      // in silence and then ignored — NetworkManager logs the file as read,
+      // the profile keeps `addr-gen-mode: default`, and the address stays
+      // whatever it would have been. Verified on the board both ways.
+      "[connection]\nipv6.addr-gen-mode=0\n",
     ),
     // Joined, not dedented: dedent takes its indent from the least-indented line,
     // and an interpolated list has none — leaving every other line indented, which
