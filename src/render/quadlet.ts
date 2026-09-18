@@ -325,7 +325,28 @@ export function renderQuadlet(
     // A restart policy is a statement that this unit should be running. For a
     // job that runs to completion the opposite is true: exiting is what it is
     // for, and `Restart=always` would turn every finished run into the next one.
-    ...(scheduled ? ["Type=oneshot"] : ["Restart=always", "RestartSec=10"]),
+    // And a restart policy with no backoff is a statement that the unit should
+    // be running *at any cost*, which on a board this size is a cost the rest of
+    // the fleet pays. A container that panics on startup — a migration that
+    // cannot apply, a config it will never accept — retried every ten seconds
+    // forever is a container start every ten seconds forever: measured here as
+    // enough sustained I/O to starve the resolver and the proxy, and to push a
+    // `statfs` on a healthy CIFS mount past the ten seconds that makes
+    // `keel-remount` declare it stale, which restarts the mount and everything
+    // requiring it. One application's bad build became a board-wide outage and a
+    // false diagnosis of the NAS.
+    //
+    // So the delay grows: 10s, then roughly doubling to a five-minute ceiling.
+    // A transient failure still recovers in ten seconds, which is the case worth
+    // optimising for, and a permanent one settles at a start every five minutes
+    // — thirty times less load, while still healing itself if whatever it waits
+    // for arrives. No `StartLimitBurst`: giving up entirely would leave a
+    // service down after a dependency blinked, and the unit is already reported
+    // either way, since the alert poller lists `auto-restart` exactly because a
+    // crash-looping container never reaches `failed`.
+    ...(scheduled
+      ? ["Type=oneshot"]
+      : ["Restart=always", "RestartSec=10", "RestartSteps=5", "RestartMaxDelaySec=300"]),
     // The job's result as a file something else mounts. `StandardError=journal`
     // is not a preference: systemd's default for it is to duplicate
     // `StandardOutput=`, so without the line the run's own logging would be
