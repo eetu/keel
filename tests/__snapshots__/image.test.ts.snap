@@ -7,6 +7,13 @@ dns=none
 "
 `;
 
+exports[`/etc/NetworkManager/conf.d/10-keel-ipv6.conf > renders the same bytes 1`] = `
+"mode 644
+[connection]
+ipv6.addr-gen-mode=eui64
+"
+`;
+
 exports[`/etc/resolv.conf > renders the same bytes 1`] = `
 "mode 644
 # Managed by keel. Pi-hole when it is up; the fallback covers the rest.
