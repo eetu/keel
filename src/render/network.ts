@@ -21,6 +21,30 @@ import { file, merge, type Tree } from "./tree";
 export function renderNetwork(): Tree {
   return merge(
     file("/etc/NetworkManager/conf.d/00-keel-dns.conf", "[main]\ndns=none\n"),
+    // The board's global IPv6 address, made a property of its hardware rather
+    // than of its installation.
+    //
+    // NetworkManager's default is stable-privacy (RFC 7217): an identifier
+    // derived from a per-host secret, so it survives reboots and changes the
+    // moment the machine is reinstalled — or the moment the operating system
+    // under it is replaced. That is the wrong property for an address other
+    // things point *at*. A board reached over IPv6 from outside has its address
+    // written down in two places no deploy can reach: the DNS record peers
+    // resolve, and the pinhole the router opens for it. Both silently stop
+    // matching when the identifier moves, and the failure is invisible from the
+    // board — everything outbound keeps working, and only inbound connections,
+    // which nobody makes from here, are refused.
+    //
+    // `eui64` derives it from the MAC instead, so it is the same address on a
+    // reinstall, the same address after a migration to another OS, and
+    // computable by hand from a label on the hardware. What it gives up is the
+    // privacy of not broadcasting the MAC inside the address, which matters for
+    // a laptop that roams between networks and not at all for a board bolted to
+    // one LAN — where being predictable is the entire point.
+    file(
+      "/etc/NetworkManager/conf.d/10-keel-ipv6.conf",
+      "[connection]\nipv6.addr-gen-mode=eui64\n",
+    ),
     // Joined, not dedented: dedent takes its indent from the least-indented line,
     // and an interpolated list has none — leaving every other line indented, which
     // glibc ignores.
