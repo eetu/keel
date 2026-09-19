@@ -42,6 +42,43 @@ export const KEEL_ALERT_SERVICE = "keel-alert.service";
 export const KEEL_ALERT_TIMER = "keel-alert.timer";
 
 /**
+ * When a stalling board is worth a phone alert.
+ *
+ * PSI's `some avg300` is the share of the last five minutes in which at least
+ * one task was stalled waiting for that resource. The thresholds are set against
+ * this fleet's measured range rather than against a round number — on the 1 GB
+ * board, io pressure reads:
+ *
+ * | quiet | settling after a deploy | degrading | the day it went off the network |
+ * | ----- | ----------------------- | --------- | ------------------------------- |
+ * | 9%    | 25–47%                  | 56%       | 83%                             |
+ *
+ * So 70% is the line: well above anything a busy-but-fine board produces, well
+ * below the state that needed a power cycle. Memory's own stall share is the
+ * second signal and a quieter one — 2% quiet, 14–28% while degrading.
+ *
+ * Neither is "memory used" or "CPU busy", and that is the point — during that
+ * outage the board reported half a gigabyte available and an idle CPU while
+ * every service waited on the disk. A conventional threshold would have said
+ * nothing.
+ */
+export const IO_PRESSURE_LIMIT = 70;
+export const MEMORY_PRESSURE_LIMIT = 50;
+
+/**
+ * How many consecutive five-minute ticks of that before it is reported.
+ *
+ * A boot starts two dozen containers at once and a deploy restarts them; both
+ * peg the disk legitimately for several minutes, and neither is worth waking
+ * somebody for. Three ticks is fifteen minutes of a board that is not
+ * recovering on its own — the outage this exists for held for over thirty.
+ */
+export const PRESSURE_TICKS = 3;
+
+/** The window the per-cgroup reclaim figures are measured over. */
+export const PRESSURE_SAMPLE_SECONDS = 10;
+
+/**
  * The deploy layer's file: the URL a message is POSTed to, or nothing. Written
  * even when there is no sink, for the same reason every other `/etc/keel` input
  * is — a present-and-empty file and an absent one have to converge alike, and
@@ -78,6 +115,11 @@ function alertScript(): Tree {
 
       CONFIG = "${ALERT_CONFIG_PATH}"
       STATE = os.path.join(os.environ.get("STATE_DIRECTORY", "/var/lib/keel"), "alert-state.json")
+      # Its own file rather than a key in the one above, whose shape is unit ->
+      # reason and is written by a board that may already have one on disk.
+      PRESSURE_STATE = os.path.join(
+          os.environ.get("STATE_DIRECTORY", "/var/lib/keel"), "pressure-state.json"
+      )
       JOURNAL_LINES = 12
       # podman runs each health check as a transient unit named after the
       # container id; one that fails is a check that failed, which the service's
@@ -157,6 +199,133 @@ function alertScript(): Tree {
           os.replace(tmp, STATE)
 
 
+      def save_pressure_state(state):
+          tmp = PRESSURE_STATE + ".tmp"
+          with open(tmp, "w") as handle:
+              json.dump(state, handle, sort_keys=True)
+          os.replace(tmp, PRESSURE_STATE)
+
+
+      def pressure():
+          """Stall shares over the last 300s, as percentages.
+
+          PSI and not "memory used", because the failure this watches is
+          invisible to the ordinary numbers: a board recycling its page cache to
+          death reports gigabytes available and idle CPU while every service
+          waits on the disk. "some" rather than "full" — one task stalled is the
+          condition, and "full" only counts moments when nothing at all could run.
+          """
+          found = {}
+          for kind in ("io", "memory", "cpu"):
+              try:
+                  with open("/proc/pressure/" + kind) as handle:
+                      for line in handle:
+                          if line.startswith("some "):
+                              for field in line.split():
+                                  name, _, value = field.partition("=")
+                                  if name == "avg300":
+                                      found[kind] = float(value)
+              except (OSError, ValueError):
+                  pass
+          return found
+
+
+      def reclaimers(seconds=${PRESSURE_SAMPLE_SECONDS}):
+          """Which cgroups are reclaiming, MB over the sample, biggest first.
+
+          The whole point of the alert: "the board is struggling" is a fact a
+          person can already feel, and this is the sentence that says which
+          service to look at. Sampled only once the threshold is already crossed,
+          so an ordinary tick reads three files and stops.
+          """
+          import glob
+          import time
+
+          def snapshot():
+              totals = {}
+              for path in glob.glob("/sys/fs/cgroup/keel.slice/*/*.service/memory.stat") + [
+                  "/sys/fs/cgroup/system.slice/memory.stat"
+              ]:
+                  name = os.path.basename(os.path.dirname(path)).replace(".service", "")
+                  try:
+                      with open(path) as handle:
+                          totals[name] = sum(
+                              int(line.split()[1])
+                              for line in handle
+                              if line.startswith("pgsteal_")
+                          )
+                  except (OSError, ValueError, IndexError):
+                      pass
+              return totals
+
+          first = snapshot()
+          time.sleep(seconds)
+          second = snapshot()
+          moved = [
+              (name, (second[name] - first[name]) * 4096 // 1048576)
+              for name in second
+              if name in first and second[name] > first[name]
+          ]
+          moved.sort(key=lambda pair: pair[1], reverse=True)
+          return [pair for pair in moved if pair[1] > 0][:5]
+
+
+      def load_pressure_state():
+          try:
+              with open(PRESSURE_STATE) as handle:
+                  return json.load(handle)
+          except (FileNotFoundError, ValueError):
+              return {"ticks": 0, "reported": False}
+
+
+      def check_pressure(host, url):
+          """Report sustained stall, once, with the cgroups responsible.
+
+          Counted in consecutive ticks rather than fired on one reading: a boot
+          starts two dozen containers at once and a deploy restarts them, both of
+          which peg this legitimately for a few minutes. ${PRESSURE_TICKS} ticks is
+          ${PRESSURE_TICKS * 5} minutes of a board that is not recovering on its own.
+          """
+          now = pressure()
+          over = [
+              kind
+              for kind, limit in (("io", ${IO_PRESSURE_LIMIT}), ("memory", ${MEMORY_PRESSURE_LIMIT}))
+              if now.get(kind, 0) >= limit
+          ]
+          state = load_pressure_state()
+
+          if not over:
+              if state["reported"]:
+                  title = host + ": pressure back to normal"
+                  body = " ".join("%s %.0f%%" % (k, v) for k, v in sorted(now.items()))
+                  print("keel-alert: " + title)
+                  if url is None or post(url, title, body, "default", "white_check_mark"):
+                      state = {"ticks": 0, "reported": False}
+              else:
+                  state["ticks"] = 0
+              save_pressure_state(state)
+              return
+
+          state["ticks"] += 1
+          if state["ticks"] < ${PRESSURE_TICKS} or state["reported"]:
+              save_pressure_state(state)
+              return
+
+          worst = reclaimers()
+          lines = [
+              "stalled: " + ", ".join("%s %.0f%%" % (k, v) for k, v in sorted(now.items())),
+              "load: " + open("/proc/loadavg").read().split(" a")[0].strip(),
+              "",
+              "reclaiming most (MB/${PRESSURE_SAMPLE_SECONDS}s):",
+          ]
+          lines += ["  %s %s" % (name, mb) for name, mb in worst] or ["  (nothing measurable)"]
+          title = host + ": under sustained " + "/".join(over) + " pressure"
+          print("keel-alert: " + title)
+          if url is None or post(url, title, "\\n".join(lines), "high", "warning"):
+              state["reported"] = True
+          save_pressure_state(state)
+
+
       def main():
           host = socket.gethostname()
           url = sink()
@@ -179,6 +348,7 @@ function alertScript(): Tree {
                   del reported[unit]
 
           save_state(reported)
+          check_pressure(host, url)
           return 0
 
 
