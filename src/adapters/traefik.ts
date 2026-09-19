@@ -72,13 +72,23 @@ export const TRAEFIK_PING_PORT = 9080;
 /**
  * What "the proxy is answering" is, as a command the image can run.
  *
- * `traefik healthcheck` re-reads the static configuration, finds the ping entry
- * point above and queries it — so the port is stated once, in the file both
- * halves read. It means answering and nothing more: it succeeds while the ACME
- * order is still in flight, which is the honest signal, and the wait for a
- * *certificate* belongs to whoever needs one.
+ * It means answering and nothing more: it succeeds while the ACME order is still
+ * in flight, which is the honest signal, and the wait for a *certificate*
+ * belongs to whoever needs one.
+ *
+ * **busybox rather than `traefik healthcheck`**, which is the same question
+ * asked by a far more expensive process. Traefik's own subcommand re-reads the
+ * static configuration to find the entry point — tidy, and it costs re-execing a
+ * 167 MB Go binary on every check. Warm that is 0.5 s and nobody notices. Cold
+ * it is **39 s**, and a boot is entirely cold: measured on the Pi 4, Traefik was
+ * serving 7.7 s after its container started and its unit did not go active until
+ * 50 s, with the identity provider and everything ordered behind it waiting out
+ * the difference. The image is Alpine, so `wget` is a symlink to a 1 MB busybox
+ * and the same check cost 2.8 s cold. The price is that the port is now named
+ * here as well as in the static config rather than only there — `TRAEFIK_PING_PORT`
+ * is what keeps the two spellings one value.
  */
-export const TRAEFIK_HEALTH_CMD = "traefik healthcheck";
+export const TRAEFIK_HEALTH_CMD = `wget -q -O /dev/null http://127.0.0.1:${TRAEFIK_PING_PORT}/ping`;
 
 /**
  * How long a service that reads a certificate out of the store may wait for the

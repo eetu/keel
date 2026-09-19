@@ -2,13 +2,10 @@
 
 exports[`'kanidm' > prices the same caps on every profile 1`] = `
 "[Service]
-MemoryHigh=96M
 MemoryMax=128M
 [Service]
-MemoryHigh=96M
 MemoryMax=128M
 [Service]
-MemoryHigh=96M
 MemoryMax=128M
 "
 `;
@@ -80,13 +77,10 @@ route /etc/traefik/dynamic/kanidm.yaml"
 
 exports[`'oauth2-proxy' > prices the same caps on every profile 1`] = `
 "[Service]
-MemoryHigh=36M
 MemoryMax=48M
 [Service]
-MemoryHigh=36M
 MemoryMax=48M
 [Service]
-MemoryHigh=36M
 MemoryMax=48M
 "
 `;
@@ -178,13 +172,10 @@ sign-in /etc/oauth2-proxy/templates/sign_in.html mode=644 restarts=true"
 
 exports[`'pihole' > prices the same caps on every profile 1`] = `
 "[Service]
-MemoryHigh=120M
 MemoryMax=160M
 [Service]
-MemoryHigh=120M
 MemoryMax=160M
 [Service]
-MemoryHigh=120M
 MemoryMax=160M
 "
 `;
@@ -276,13 +267,10 @@ hosts /var/lib/pihole/hosts/keel.list mode=644 restarts=false"
 
 exports[`'traefik' > prices the same caps on every profile 1`] = `
 "[Service]
-MemoryHigh=192M
 MemoryMax=256M
 [Service]
-MemoryHigh=192M
 MemoryMax=256M
 [Service]
-MemoryHigh=192M
 MemoryMax=256M
 "
 `;
@@ -323,8 +311,8 @@ Network=host
 Volume=/etc/traefik:/etc/traefik:ro,Z
 Volume=/var/lib/traefik:/var/lib/traefik:Z
 EnvironmentFile=/etc/secrets/traefik.env
-HealthCmd=traefik healthcheck
-HealthStartupCmd=traefik healthcheck
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:9080/ping
+HealthStartupCmd=wget -q -O /dev/null http://127.0.0.1:9080/ping
 HealthStartupInterval=5s
 HealthInterval=60s
 HealthStartPeriod=10s
@@ -398,13 +386,10 @@ middlewares /etc/traefik/dynamic/middlewares.yml mode=644 restarts=false"
 
 exports[`'vaultwarden' > prices the same caps on every profile 1`] = `
 "[Service]
-MemoryHigh=36M
 MemoryMax=48M
 [Service]
-MemoryHigh=36M
 MemoryMax=48M
 [Service]
-MemoryHigh=36M
 MemoryMax=48M
 "
 `;

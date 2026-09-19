@@ -75,11 +75,24 @@ describe("service specs", () => {
     if (memory.high !== undefined) expect(memory.high).toBeLessThanOrEqual(memory.max);
   });
 
-  it("defaults the soft throttle to 75% of the hard cap", () => {
-    // Asserted as a relationship, not a number: the caps come from measurement
-    // and are expected to move when the fleet is re-measured.
-    const { maxMb, highMb } = resolveMemory("traefik", PROFILES[0]);
-    expect(highMb).toBe(Math.round(maxMb * 0.75));
+  it("derives no soft throttle at all", () => {
+    // It used to derive one at 75% of the cap, which is under the binary for
+    // every Go and Rust service here — a cgroup is charged its executable's text
+    // as *file* pages, so the kernel was made to evict text the process faulted
+    // straight back in. Measured: 528 MB reclaimed every 20s by the gate alone,
+    // sitting at 34 MB against a 36 MB ceiling, and 0 once the ceiling went.
+    expect(resolveMemory("traefik", PROFILES[0]).highMb).toBeUndefined();
+    const dropIn = serviceDropIn("traefik", PROFILES[0]);
+    expect(dropIn).not.toContain("MemoryHigh");
+    expect(dropIn).toContain("MemoryMax=");
+  });
+
+  it("honours one an entry states, and writes it", () => {
+    // The escape hatch stays for a service that genuinely wants throttling short
+    // of its ceiling — asserted on a declaration written here, because whether
+    // any catalog happens to hold one is a fact about an installation.
+    const throttled = priceMemory({ max: 64, high: 48, tier: "apps" }, PROFILES[0]);
+    expect(throttled.highMb).toBe(48);
   });
 
   it.each(CAPS.filter(([, memory]) => memory.measuredMb !== undefined))(
