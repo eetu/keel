@@ -109,6 +109,19 @@ export const SHARE_MOUNTPOINT = "/run/keel-backup/share";
 export const RESTORE_DIR = "/var/tmp/keel-restore";
 
 /**
+ * Bare git repositories, snapshotted whether or not anything put one here.
+ *
+ * `git-core` is in the image and sshd is already serving, so a board can host a
+ * repository with no service, no port and no entry — which also means there is
+ * nothing for `backup: true` to be written on, and every other path in the set
+ * arrives that way. Named once here rather than made configurable: a directory
+ * that does not exist is skipped at run time, so a clone that never creates one
+ * pays nothing, and a fleet where this had to be declared per installation would
+ * be asking every adopter to answer a question with one sensible answer.
+ */
+export const GIT_REPOS_DIR = "/var/lib/git";
+
+/**
  * The credentials a run needs, as vault field names — read at deploy time,
  * sealed for the host and never an input to anything.
  *

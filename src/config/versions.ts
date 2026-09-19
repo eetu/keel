@@ -9,6 +9,16 @@
  * matters: without `age` no secret is ever decrypted, and every service starts
  * with an empty environment. `semanage` is what labels unbound's port —
  * without it the resolver cannot bind under enforcing SELinux.
+ *
+ * Keep it to that, for the reason `REQUIRED_UNITS` below is kept precise: a name
+ * here is a rollback trigger, and the question to ask of a candidate is not "is
+ * it in the image" but "is a board without it worth putting back on yesterday's
+ * OS". `restic`, `cifs-utils` and `git-core` are all in the image and none is
+ * here — a board missing them still resolves, proxies, authenticates and backs
+ * up, so their absence is a broken command rather than a broken boot. The
+ * deploy-side check for the same class of question is `RemoteBinary`, which
+ * fails one resource by name; it is also the only one of the two that can meet
+ * an image older than itself, since this list ships inside the image it checks.
  */
 export const REQUIRED_BINARIES: readonly string[] = [
   "age",

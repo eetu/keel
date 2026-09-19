@@ -40,20 +40,39 @@ LABEL org.opencontainers.image.source="${SOURCE_URL}"
 # cannot be removed. Swallowing the error is safe because the fatal lint below is
 # the actual gate on a clean layer.
 #
+# `git-core` is what makes a bare repository on this board a thing that works
+# over ssh, with no service, no port and no vhost: `git-receive-pack` and
+# `git-upload-pack` run as the login user in the session sshd already grants, and
+# the filter already admits :22 from the LAN and the mesh both. `-core` and not
+# `git`: the metapackage drags in perl for `git-send-email` and friends, none of
+# which a repository being pushed to has any use for.
+#
 # `restic` and `cifs-utils` are the backup's long-term home. Neither is required
 # for a snapshot to be taken — the deploy layer mounts the share through the
 # kernel's own cifs driver and runs restic from a pinned container, because a
 # board already in the field cannot be given a package — but both belong on the
 # machine: a mount helper turns a `.mount` unit into an option, and a restic on
 # PATH is what makes a restore something you can do from an ssh session on a host
-# whose services are down. Deliberately absent from `REQUIRED_BINARIES`: the
-# fleet is running images built before this line, and a selftest that demanded a
-# binary the running image cannot have would fail on every host until each is
-# updated.
+# whose services are down.
+#
+# None of these three is in `REQUIRED_BINARIES`, and the reason is what that list
+# costs rather than anything about which image a board is on — the selftest is
+# image content, so it ships with the binaries it checks and can never be newer
+# than them. The list is a *rollback trigger*: a name in it that does not resolve
+# fails greenboot's required check, and three boots later the board is back on
+# the previous image. That is the right trade for `age` and `nft`, without which
+# nothing decrypts and nothing is filtered. It is the wrong one here — a board
+# with no `git` still resolves, proxies, authenticates and backs up, and the
+# failure is a push that does not work. Rolling the whole OS back for it would
+# mean a Fedora packaging change taking the house's DNS down. The deploy-side
+# equivalent, for the case where a new deploy really can meet an older image, is
+# `RemoteBinary` — which is how `mount.cifs` is checked, and it fails one
+# resource by name instead of the boot.
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         age \
         cifs-utils \
         cloud-utils-growpart \
+        git-core \
         greenboot \
         nftables \
         openssh-server \

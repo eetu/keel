@@ -239,6 +239,17 @@ would be one house's vault name that every other deploy read without being told
 — and `tests/catalog.test.ts` counts it among the values a committed entry may
 not spell.
 
+**One path in the snapshot set is no service's.** Everything else arrives from
+`backup: true` on an entry, which contributes its `/var/lib/<name>`. A bare git
+repository has no entry to write that on — `git-core` is a package and sshd is
+already serving — so `GIT_REPOS_DIR` (`/var/lib/git`) is in the set
+unconditionally, and `backupSet` refuses a service that would claim the same
+directory. Not a configurable list: a path that does not exist is skipped when
+the run happens, so a board with no repository pays nothing, and making it
+per-installation would ask every adopter to answer a question with one sensible
+answer. Anything else worth snapshotting is a service, and belongs on that
+service's entry, where retiring it retires the backup with it.
+
 **A clean clone is an invariant, not an aspiration.** Copy the two
 `.example.ts` files over their real names and `yarn validate`, `yarn render` and
 `image/build.sh` all work — that is the first thing anybody adopting this does,
