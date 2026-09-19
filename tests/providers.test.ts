@@ -276,6 +276,39 @@ describe("a unit whose steady state is inactive", () => {
     });
   });
 
+  it("clears the failed state a retired unit would otherwise keep", async () => {
+    // Nothing else ever will. A container whose stop exits non-zero lands the
+    // unit in `failed`, and the quadlet file is deleted in the same run — so the
+    // generator stops producing the unit and `failed` is all that remains of it,
+    // with no resource left to converge. The image's five-minute poller then
+    // reports it for as long as the board is up: retiring ntfy sent a phone
+    // alert for a service that had just been removed on purpose.
+    await withRecordingSsh(async (calls) => {
+      await systemdUnitProvider.delete!("nowhere:job.service", {
+        ...job,
+        active: "failed",
+        enabled: "generated",
+      });
+      expect(calls().join("\n")).toContain("systemctl reset-failed job.service");
+    });
+  });
+
+  it("leaves a borrowed unit entirely alone", async () => {
+    // `action: "reload"` means the image owns it and Pulumi only ever handed it
+    // configuration. Neither the stop nor the reset-failed applies — clearing
+    // state on a unit this resource does not own is still touching it.
+    await withRecordingSsh(async (calls) => {
+      await systemdUnitProvider.delete!("nowhere:nftables.service", {
+        ...job,
+        unit: "nftables.service",
+        action: "reload",
+        active: "active",
+        enabled: "enabled",
+      });
+      expect(calls()).toEqual([]);
+    });
+  });
+
   describe("the packet filter", () => {
     const filter: PacketFilterInputs = {
       host: "nowhere",

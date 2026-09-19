@@ -226,6 +226,16 @@ const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
       ? ["systemctl", "stop", props.unit]
       : ["systemctl", "disable", "--now", props.unit];
     await run(props.host, argv, undefined, props.sshArgs);
+    // And clear the failed state the stop may have left, because nothing else
+    // ever will. A container whose stop exits non-zero — a health check already
+    // failing, a SIGTERM the image ignores — lands the unit in `failed`, and a
+    // retired service has no resource left to converge it: the quadlet file is
+    // deleted by its own resource in the same run, so the generator stops
+    // producing the unit and `failed` is all that remains of it. The image's
+    // five-minute poller then reports that unit for as long as the board is up.
+    // Observed exactly once and immediately: retiring ntfy sent a phone alert
+    // for a service that had just been removed on purpose.
+    await run(props.host, ["systemctl", "reset-failed", props.unit], undefined, props.sshArgs);
   },
 };
 
