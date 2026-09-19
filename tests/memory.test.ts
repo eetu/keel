@@ -75,16 +75,17 @@ describe("service specs", () => {
     if (memory.high !== undefined) expect(memory.high).toBeLessThanOrEqual(memory.max);
   });
 
-  it("derives no soft throttle at all", () => {
-    // It used to derive one at 75% of the cap, which is under the binary for
-    // every Go and Rust service here — a cgroup is charged its executable's text
-    // as *file* pages, so the kernel was made to evict text the process faulted
-    // straight back in. Measured: 528 MB reclaimed every 20s by the gate alone,
-    // sitting at 34 MB against a 36 MB ceiling, and 0 once the ceiling went.
-    expect(resolveMemory("traefik", PROFILES[0]).highMb).toBeUndefined();
-    const dropIn = serviceDropIn("traefik", PROFILES[0]);
-    expect(dropIn).not.toContain("MemoryHigh");
-    expect(dropIn).toContain("MemoryMax=");
+  it("puts the soft ceiling at the cap and never under it", () => {
+    // Both halves of this were learned the hard way. At 75% of the cap it sat
+    // under the binary — a cgroup is charged its executable's text as *file*
+    // pages — so the kernel evicted text the process faulted straight back in:
+    // 528 MB reclaimed every 20s by the gate alone, at 34 MB against a 36 MB
+    // ceiling. Removing it entirely was worse, because a soft ceiling is what
+    // confines a cgroup so its growth is not everyone else's problem: unconfined,
+    // the board went to 5,622 MB/20s, 83% io pressure, and off the network.
+    const { maxMb, highMb } = resolveMemory("traefik", PROFILES[0]);
+    expect(highMb).toBe(maxMb);
+    expect(serviceDropIn("traefik", PROFILES[0])).toContain(`MemoryHigh=${maxMb}M`);
   });
 
   it("honours one an entry states, and writes it", () => {
