@@ -835,9 +835,26 @@ for blob in /etc/secrets/*.age; do
     out="\${blob%.age}"
     # Decrypt to a temporary file and rename, so a reader never sees a
     # half-written env file and a failed decrypt leaves the old one intact.
-    tmp="$out.new"
-    age --decrypt --identity "$key" --output "$tmp" "$blob"
+    #
+    # mktemp and not "$out.new": every SecretFile's create and update runs
+    # this script over *every* blob, and a deploy writes several at once.
+    # With one fixed name two concurrent runs raced — both wrote it, the
+    # first renamed it, and the second's mv failed on a file that was no
+    # longer there. \`set -e\` then killed the loser part-way through, so a
+    # resource reported failure and the secrets after it in the glob were
+    # never written. A private name per run makes the concurrency harmless:
+    # each writes its own file and renames it over the same destination,
+    # and rename(2) is atomic, so a reader sees one whole version or the
+    # other.
+    tmp="$(mktemp "$out.XXXXXX")"
     chmod 600 "$tmp"
+    # The temporary file is this run's, so a failure has to remove it —
+    # otherwise a decrypt that dies leaves a stray beside the real one,
+    # and the next run's glob does not clean it up.
+    if ! age --decrypt --identity "$key" --output "$tmp" "$blob"; then
+        rm -f "$tmp"
+        exit 1
+    fi
     mv "$tmp" "$out"
 done
 "
@@ -923,7 +940,7 @@ exports[`/usr/lib/keel/profiles/1g/units/keel-apps.slice.conf > renders the same
 # accounted for. The apps' own caps may total more than this on
 # purpose: they are idle Go and Rust binaries and are never all hot at
 # once, and throttling here is how that is resolved.
-MemoryHigh=486M
+MemoryHigh=456M
 "
 `;
 
@@ -932,7 +949,7 @@ exports[`/usr/lib/keel/profiles/1g/units/keel-core.slice.conf > renders the same
 [Slice]
 # The tier's hard-cap total, so the guarantee holds however hard the
 # apps push.
-MemoryLow=464M
+MemoryLow=656M
 "
 `;
 
@@ -943,7 +960,7 @@ exports[`/usr/lib/keel/profiles/4g/units/keel-apps.slice.conf > renders the same
 # accounted for. The apps' own caps may total more than this on
 # purpose: they are idle Go and Rust binaries and are never all hot at
 # once, and throttling here is how that is resolved.
-MemoryHigh=3366M
+MemoryHigh=3336M
 "
 `;
 
@@ -952,7 +969,7 @@ exports[`/usr/lib/keel/profiles/4g/units/keel-core.slice.conf > renders the same
 [Slice]
 # The tier's hard-cap total, so the guarantee holds however hard the
 # apps push.
-MemoryLow=464M
+MemoryLow=656M
 "
 `;
 
@@ -963,7 +980,7 @@ exports[`/usr/lib/keel/profiles/8g/units/keel-apps.slice.conf > renders the same
 # accounted for. The apps' own caps may total more than this on
 # purpose: they are idle Go and Rust binaries and are never all hot at
 # once, and throttling here is how that is resolved.
-MemoryHigh=7206M
+MemoryHigh=7176M
 "
 `;
 
@@ -972,7 +989,7 @@ exports[`/usr/lib/keel/profiles/8g/units/keel-core.slice.conf > renders the same
 [Slice]
 # The tier's hard-cap total, so the guarantee holds however hard the
 # apps push.
-MemoryLow=464M
+MemoryLow=656M
 "
 `;
 

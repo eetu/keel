@@ -102,7 +102,18 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     // What it binds on the host. Every other service's port is a loopback
     // upstream behind this one.
     port: 443,
-    memory: { max: 128, measuredMb: 83, tier: "core" },
+    // The binary is 167 MB of Go, and a cgroup's memory accounting charges the
+    // executable's own text to it as file pages — so 83 MB of what this service
+    // "uses" is the parts of itself it is currently executing. A ceiling below
+    // that does not make it smaller, it makes the kernel evict text pages the
+    // process is about to fault back in: on a cold image store the old 128 MB
+    // ceiling turned a start into a reclaim loop that never converged
+    // (490,730 memory.high events, /ping unanswered, 62 connections queued on
+    // an accept backlog nothing was accepting). Given room it settles at 67 MB
+    // and the loop does not start. So this cap is sized against the binary and
+    // not against the workload, which is the whole of why it is larger than the
+    // measurement-times-2.5 rule the profile file describes.
+    memory: { max: 256, measuredMb: 97, tier: "core" },
     // It terminates 443 for the whole LAN, and the allowlist middleware matches
     // on the client's address — which a bridge would rewrite to the gateway's.
     egress: "host",
@@ -181,7 +192,11 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     image:
       "docker.io/kanidm/server@sha256:7c3d7ed868e91f78c24a7fb9c548876563b375a4203021b730d58369b97ad154",
     port: KANIDM_PORT,
-    memory: { max: 64, measuredMb: 31, tier: "core" },
+    // Same shape as Traefik's above: 45 MB of the 47 is the Rust binary's own
+    // text, and a 48 MB MemoryHigh sat underneath it — 9,465 throttle events
+    // and a start job that timed out at 600 s while the server itself was
+    // healthy and answering. Given room it went healthy in seconds.
+    memory: { max: 128, measuredMb: 47, tier: "core" },
     subdomain: "idm",
     // The login page is a name a browser types, so it resolves the same way from
     // the LAN and from the mesh. The record points at the LAN address; reaching

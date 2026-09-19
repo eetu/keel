@@ -49,9 +49,26 @@ export function renderSecrets(): Tree {
             out="\${blob%.age}"
             # Decrypt to a temporary file and rename, so a reader never sees a
             # half-written env file and a failed decrypt leaves the old one intact.
-            tmp="$out.new"
-            age --decrypt --identity "$key" --output "$tmp" "$blob"
+            #
+            # mktemp and not "$out.new": every SecretFile's create and update runs
+            # this script over *every* blob, and a deploy writes several at once.
+            # With one fixed name two concurrent runs raced — both wrote it, the
+            # first renamed it, and the second's mv failed on a file that was no
+            # longer there. \`set -e\` then killed the loser part-way through, so a
+            # resource reported failure and the secrets after it in the glob were
+            # never written. A private name per run makes the concurrency harmless:
+            # each writes its own file and renames it over the same destination,
+            # and rename(2) is atomic, so a reader sees one whole version or the
+            # other.
+            tmp="$(mktemp "$out.XXXXXX")"
             chmod 600 "$tmp"
+            # The temporary file is this run's, so a failure has to remove it —
+            # otherwise a decrypt that dies leaves a stray beside the real one,
+            # and the next run's glob does not clean it up.
+            if ! age --decrypt --identity "$key" --output "$tmp" "$blob"; then
+                rm -f "$tmp"
+                exit 1
+            fi
             mv "$tmp" "$out"
         done
       `),

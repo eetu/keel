@@ -36,7 +36,10 @@ image/test.sh "${tag}" >/dev/null
 echo "  passed"
 
 mkdir -p "${out}"
-yarn card-config "${host}" > "${out}/keel.conf"
+# The vendored release, for the reason build.sh names: corepack's `yarn` shim is
+# not on a current Node.
+releases=(.yarn/releases/yarn-*.cjs)
+node "${releases[0]}" card-config "${host}" > "${out}/keel.conf"
 echo "== keel.conf for ${host}"
 sed 's/^/  /' "${out}/keel.conf"
 

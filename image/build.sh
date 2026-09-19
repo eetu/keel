@@ -9,7 +9,14 @@ tag="${1:-keel:latest}"
 
 cd "$(dirname "$0")/.."
 
-yarn render
+# The vendored release directly, not a `yarn` on PATH. `yarn` on PATH is corepack
+# shimming this same file, and corepack stopped shipping with Node in 26 — so on
+# a machine whose Node is current, a bare `yarn` here is "command not found" and
+# the build stops before it has rendered anything. The path is the one
+# `packageManager` in package.json already pins, so there is nothing extra to
+# keep in step.
+releases=(.yarn/releases/yarn-*.cjs)
+node "${releases[0]}" render
 
 # The image's one piece of provenance, taken from the build that produced it
 # rather than from a constant in the Containerfile: whoever builds this — a fork,

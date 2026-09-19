@@ -852,6 +852,34 @@ backend`) unless it waits. No `Conflicts=` between the units — that would kill
   of "no rules" that became an absent file would be a deletion again, and the
   reload would re-read the copy still on disk. Present and empty is what closes
   a port; absent is what re-opens it.
+- **A memory cap has to hold the binary, and a Go or Rust binary is most of
+  what the cgroup counts.** A cgroup charges an executable's own text to it as
+  _file_ pages, so traefik's 167 MB binary is what its `memory.current` is
+  mostly made of — 83 MB of it resident, under a `MemoryHigh` of 96.
+  `MemoryHigh` only throttles and reclaims, so a ceiling under the binary does
+  not make the process smaller: it makes the kernel evict text the process is
+  about to fault back in. On a warm store that is slow and survivable; on a
+  board where every service cold-started at once against an empty image store it
+  never converged — 490,730 `memory.high` events, `/ping` unanswered, 62
+  connections queued on an accept backlog nothing was accepting, and a start job
+  that timed out at 600 s while the process was alive. Kanidm had the same shape
+  one size down, and ntfy hit its _hard_ ceiling eleven times. Given room,
+  traefik settles at 67 MB — _below_ the cap it was thrashing against, because
+  the loop was feeding itself. So those caps are sized against the binary rather
+  than against the workload, which is why they break the
+  measurement-times-2.5 rule `profiles.ts` describes, and why the figure to
+  check before lowering one is `ls -l $(command -v <binary>)` inside the image
+  and `memory.stat`'s `file` line on the board, not `systemd-cgtop` alone.
+- **`decrypt-secrets` runs over every blob, and a deploy writes several at
+  once.** Each `SecretFile` create and update invokes it, so a run that seals
+  four secrets invokes it four times concurrently. With one fixed temporary name
+  (`$out.new`) they raced: both wrote it, the first renamed it, the second's
+  `mv` failed on a file that was no longer there, and `set -e` killed the loser
+  part-way down the glob — so a resource failed and every secret after it in the
+  glob went unwritten, three deploys running. `mktemp` gives each run its own
+  name and `rename(2)` is atomic, so the concurrency is harmless. A new script
+  under `/usr/lib/keel` that a provider invokes per-resource has the same
+  problem waiting.
 - **A first start pulls the image inside `ExecStart`, and systemd's default
   start timeout is 90 seconds.** A quadlet with `Pull=missing` (the quadlet
   default) pulls the image on the first `systemctl start`; podman gives itself
