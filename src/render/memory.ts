@@ -89,9 +89,7 @@ function profileIndex(): Tree {
 /** Composed line by line: an interpolated block would carry its own indentation. */
 function capLines(service: string, profile: Profile): readonly string[] {
   const { maxMb, highMb } = resolveMemory(service, profile);
-  // `MemoryHigh` only where the entry asked for one. See `priceMemory` for why a
-  // derived soft ceiling was the wrong shape for a binary-dominated service.
-  return [...(highMb === undefined ? [] : [`MemoryHigh=${highMb}M`]), `MemoryMax=${maxMb}M`];
+  return [`MemoryHigh=${highMb}M`, `MemoryMax=${maxMb}M`];
 }
 
 /**

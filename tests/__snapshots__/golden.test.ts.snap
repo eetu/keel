@@ -2,10 +2,13 @@
 
 exports[`'kanidm' > prices the same caps on every profile 1`] = `
 "[Service]
+MemoryHigh=128M
 MemoryMax=128M
 [Service]
+MemoryHigh=128M
 MemoryMax=128M
 [Service]
+MemoryHigh=128M
 MemoryMax=128M
 "
 `;
@@ -77,10 +80,13 @@ route /etc/traefik/dynamic/kanidm.yaml"
 
 exports[`'oauth2-proxy' > prices the same caps on every profile 1`] = `
 "[Service]
+MemoryHigh=48M
 MemoryMax=48M
 [Service]
+MemoryHigh=48M
 MemoryMax=48M
 [Service]
+MemoryHigh=48M
 MemoryMax=48M
 "
 `;
@@ -172,10 +178,13 @@ sign-in /etc/oauth2-proxy/templates/sign_in.html mode=644 restarts=true"
 
 exports[`'pihole' > prices the same caps on every profile 1`] = `
 "[Service]
+MemoryHigh=160M
 MemoryMax=160M
 [Service]
+MemoryHigh=160M
 MemoryMax=160M
 [Service]
+MemoryHigh=160M
 MemoryMax=160M
 "
 `;
@@ -267,10 +276,13 @@ hosts /var/lib/pihole/hosts/keel.list mode=644 restarts=false"
 
 exports[`'traefik' > prices the same caps on every profile 1`] = `
 "[Service]
+MemoryHigh=256M
 MemoryMax=256M
 [Service]
+MemoryHigh=256M
 MemoryMax=256M
 [Service]
+MemoryHigh=256M
 MemoryMax=256M
 "
 `;
@@ -386,10 +398,13 @@ middlewares /etc/traefik/dynamic/middlewares.yml mode=644 restarts=false"
 
 exports[`'vaultwarden' > prices the same caps on every profile 1`] = `
 "[Service]
+MemoryHigh=48M
 MemoryMax=48M
 [Service]
+MemoryHigh=48M
 MemoryMax=48M
 [Service]
+MemoryHigh=48M
 MemoryMax=48M
 "
 `;

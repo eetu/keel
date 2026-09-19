@@ -1934,6 +1934,7 @@ exports[`/usr/lib/systemd/system/unbound.service.d/50-keel-memory.conf > renders
 "mode 644
 [Service]
 Slice=keel-core.slice
+MemoryHigh=64M
 MemoryMax=64M
 "
 `;

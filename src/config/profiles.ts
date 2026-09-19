@@ -90,8 +90,7 @@ export function selectProfile(ramMb: number): Profile {
 
 export type ResolvedMemory = {
   maxMb: number;
-  /** Only where an entry asked for one — see `priceMemory`. */
-  highMb?: number;
+  highMb: number;
   tier: Tier;
 };
 
@@ -106,36 +105,37 @@ function maxUnder(memory: ServiceMemory, profile: Profile): number {
  * any catalog happens to hold a service that scales is a fact about one
  * installation, and the pricing rule is not.
  *
- * **`MemoryHigh` is stated, never derived**, and that is a correction rather
- * than a preference. It used to be `max * 0.75`, which reads as prudent and is
- * wrong for what runs here: a cgroup is charged its executable's text as _file_
- * pages, and these services are Go and Rust binaries whose text is nearly all of
- * what they hold — `anon 0.1 MB / file 29 MB` for the gate, `anon 0.02 / file 48`
- * for the notifier, `file 141` for the proxy. Three quarters of a cap sized from
- * a measurement of the same binary therefore lands *under* the binary, and
- * `MemoryHigh` is not advice: the kernel reclaims to hold the line, evicting text
- * the process faults straight back in. Measured on the 1 GB board, the gate alone
- * was reclaiming 528 MB every twenty seconds while sitting at 34 MB against a
- * 36 MB ceiling; removing its `MemoryHigh` took that to zero and left it using
- * 8.5 MB. The board reads 725 MB/s off the disk at idle for this and nothing
- * else.
+ * **`MemoryHigh` sits at the hard cap, and the history is why.** It was once
+ * `max * 0.75`, which lands under the binary for every Go and Rust service here:
+ * a cgroup is charged its executable's text as _file_ pages, and these hold
+ * almost nothing else — `anon 0.1 MB / file 29 MB` for the gate, `file 141` for
+ * the proxy. So the kernel was made to evict text the process faulted straight
+ * back in, and lifting the gate's ceiling alone took it from 528 MB reclaimed
+ * every twenty seconds to none.
  *
- * So the ceiling that remains is `MemoryMax`, which kills rather than throttles,
- * and that is the better failure here: a kill leaves a failed unit the
- * five-minute poller reports to a phone, where throttling is invisible and
- * degrades every service on the board at once. `keel-core.slice`'s `MemoryLow`
- * still protects the core tier from reclaim, and `keel-apps.slice` still carries
- * a `MemoryHigh` — a whole tier being asked to give way under real pressure is
- * what that setting is for, and it is the one place the reclaim it forces is the
- * point.
+ * Removing it from *every* service then made the board far worse rather than
+ * better: reclaim 2,265 -> 5,622 MB per twenty seconds, disk reads 725 -> 2,754,
+ * io pressure 47% -> 83%, and finally a board that fell off the network under its
+ * own IO and had to be power-cycled. The single-service result did not
+ * generalise, and the reason is exactly what the setting is for — a soft ceiling
+ * confines a cgroup so its growth is not everyone else's problem. With all of
+ * them unconfined the machine reclaims globally instead, which is untargeted and
+ * costs far more than the per-cgroup reclaim it replaced.
  *
- * `high` on an entry stays, for a service that genuinely wants throttling before
- * its ceiling. Nothing in the committed catalog does; reach for it with a
- * measurement in hand.
+ * So the ceiling stays, and sits *at* the cap rather than under it: still
+ * confined, never below what the service's own binary needs. Measured back down
+ * to 2,787 MB/20s and 23% io pressure from the 83% the unconfined board sat at.
+ *
+ * What remains genuinely wrong is a `max` set below a binary's text — ntfy at 48
+ * against a 62 MB binary, the proxy at 128 against 167. That is a number on an
+ * entry, fixed by measuring the binary, and not a rule to encode here.
+ *
+ * `high` on an entry still overrides, for a service that wants throttling short
+ * of its ceiling. Nothing in the committed catalog does.
  */
 export function priceMemory(memory: ServiceMemory, profile: Profile): ResolvedMemory {
   const maxMb = maxUnder(memory, profile);
-  return { maxMb, highMb: memory.high, tier: memory.tier };
+  return { maxMb, highMb: memory.high ?? maxMb, tier: memory.tier };
 }
 
 /** A named service's caps under a given profile. */
