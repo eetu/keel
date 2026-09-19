@@ -24,6 +24,7 @@ import {
   BACKUP_MEMORY_MB,
   BACKUP_SCHEDULE,
   BACKUP_TAG,
+  GIT_REPOS_DIR,
   PRUNE_MAX_UNUSED,
   PRUNE_SCHEDULE,
   RANDOMIZED_DELAY,
@@ -93,6 +94,9 @@ export function backupSet(specs: readonly ServiceSpec[]): BackupSet {
       }
       continue;
     }
+    if (path === GIT_REPOS_DIR) {
+      throw new Error(`${spec.name} backs up ${path}, which is where bare repositories live`);
+    }
     paths.push(path);
     for (const pattern of spec.backupExclude ?? []) {
       if (!pattern.startsWith(`${path}/`)) {
@@ -101,6 +105,11 @@ export function backupSet(specs: readonly ServiceSpec[]): BackupSet {
       excludes.push(pattern);
     }
   }
+  // Unconditional, and skipped at run time when nothing has created it. A board
+  // hosting a bare repository has no entry to declare it with — sshd serves it
+  // and `git-core` is a package — so this is the one path in the set that is not
+  // some service's.
+  paths.push(GIT_REPOS_DIR);
   return { paths: paths.sort(), excludes: excludes.sort() };
 }
 

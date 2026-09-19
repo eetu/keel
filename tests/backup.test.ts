@@ -10,7 +10,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { BACKUP_SECRET_ENV, RESTIC_IMAGE, RETENTION_GROUP_BY } from "../src/config/backup";
+import {
+  BACKUP_SECRET_ENV,
+  GIT_REPOS_DIR,
+  RESTIC_IMAGE,
+  RETENTION_GROUP_BY,
+} from "../src/config/backup";
 import { SERVICES } from "../src/config/services";
 import { backupPath, type ServiceSpec } from "../src/config/spec";
 import { type BackupTarget } from "../src/config/types";
@@ -57,9 +62,11 @@ describe("the snapshot set derives from the catalog", () => {
     // the catalog's order is not a change to the backup.
     const { paths, excludes } = backupSet(SERVICES);
     expect(paths).toEqual(
-      SERVICES.map(backupPath)
-        .filter((path): path is string => path !== null)
-        .sort(),
+      [
+        ...SERVICES.map(backupPath).filter((path): path is string => path !== null),
+        // The one path no entry declares — see its own case below.
+        GIT_REPOS_DIR,
+      ].sort(),
     );
     for (const spec of SERVICES) {
       expect(paths.includes(`/var/lib/${spec.name}`), spec.name).toBe(spec.backup === true);
@@ -157,5 +164,32 @@ describe("the open bridge's forward rule", () => {
     const none = renderNftForward(false);
     expect(none).not.toContain("iifname");
     expect(none).toMatch(/^#/);
+  });
+});
+
+describe("the one path in the set that is no service's", () => {
+  it("covers bare repositories whether or not the board has any", () => {
+    // sshd serves them and `git-core` is a package, so there is no entry to
+    // write `backup: true` on — and without this line a repository on the board
+    // is the one directory nobody is copying. Unconditional because a path that
+    // does not exist is skipped when the run happens, so a board with no
+    // repository pays nothing for the declaration.
+    expect(backupSet(SERVICES).paths).toContain(GIT_REPOS_DIR);
+    expect(backupSet([]).paths).toEqual([GIT_REPOS_DIR]);
+  });
+
+  it("refuses a service that would claim the same directory", () => {
+    // Two owners of one path: restic walks it once, the snapshot holds both, and
+    // retiring the service takes the repositories out of the backup with it.
+    const clash: ServiceSpec = {
+      name: GIT_REPOS_DIR.split("/").pop()!,
+      description: "fixture",
+      image: "x@sha256:0",
+      port: 1,
+      memory: { max: 32, tier: "apps" },
+      auth: "open",
+      backup: true,
+    };
+    expect(() => backupSet([clash])).toThrow(/where bare repositories live/);
   });
 });
