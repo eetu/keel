@@ -63,6 +63,23 @@ export const INSTALLATION: Installation = {
   publicHosts: [],
 
   /**
+   * Where a failure is posted — the image's five-minute poller and the status
+   * page both send here. Any ntfy server: the hosted one, or your own.
+   *
+   * Prefer one that is not on the board. A sink running on the machine it
+   * watches cannot report that machine being down, which is the alert most
+   * worth having; a hosted topic survives the host and pushes to a phone.
+   *
+   * The topic is the credential — anyone who knows it can read these alerts and
+   * post to them — so make it long and random. Omit the whole field and the
+   * poller writes an empty config and says nothing.
+   */
+  alerts: {
+    url: "https://ntfy.sh",
+    topic: "change-me-to-something-random",
+  },
+
+  /**
    * The SMB share holding the restic repository, for a host with `backup: true`.
    * `host` may be a name, but only if the board resolves it — an address asks
    * nothing of DNS. The credentials are vault fields (`cifs` item,

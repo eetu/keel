@@ -247,11 +247,6 @@ export type GateRole = {
  * is derived — the image's poller runs on the host and posts to the loopback
  * port the entry publishes, so nothing here names a zone or an address.
  */
-export type AlertRole = {
-  /** The ntfy topic the board's failures land in; what a phone subscribes to. */
-  topic: string;
-};
-
 /**
  * The metrics hub a client of it gets an account on.
  *
@@ -543,19 +538,8 @@ export type Roles = {
   proxy?: Claimed<ProxyRole>;
   identity?: Claimed<IdentityRole>;
   gate?: Claimed<GateRole>;
-  alerts?: Claimed<AlertRole>;
   metrics?: Claimed<MetricsRole>;
 };
-
-/**
- * Where the image's poller posts a failure: the sink's published loopback port
- * and its topic. Loopback because the poller is the host's — a bridge service
- * publishes there and a host-network one binds there — and the proxy is not in
- * the path, so an alert about the proxy still arrives.
- */
-export function alertUrl(alerts: Claimed<AlertRole>): string {
-  return `http://127.0.0.1:${alerts.spec.port}/${alerts.role.topic}`;
-}
 
 /** Those roles and the set they were resolved from. */
 export type Catalog = Roles & {
@@ -856,7 +840,6 @@ export type ServiceSpec = {
   proxy?: ProxyRole;
   identity?: IdentityRole;
   gate?: GateRole;
-  alerts?: AlertRole;
   metrics?: MetricsRole;
   /**
    * An account on the metrics hub, created by the deploy rather than by a
@@ -887,7 +870,7 @@ export type ServiceSpec = {
 };
 
 /** The role fields, which are the keys `roles()` resolves. */
-type RoleKey = "proxy" | "identity" | "gate" | "alerts" | "metrics";
+type RoleKey = "proxy" | "identity" | "gate" | "metrics";
 
 /**
  * The entry claiming one role, or undefined when nothing being deployed does.
@@ -921,7 +904,6 @@ export function roles(specs: readonly ServiceSpec[]): Roles {
     proxy: claimant(specs, "proxy"),
     identity: claimant(specs, "identity"),
     gate: claimant(specs, "gate"),
-    alerts: claimant(specs, "alerts"),
     metrics: claimant(specs, "metrics"),
   };
 }

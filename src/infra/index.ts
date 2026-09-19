@@ -28,7 +28,6 @@ import { CLOUDFLARE_FIELD, CLOUDFLARE_ITEM } from "../config/cloudflare";
 import { INSTALLATION } from "../config/installation";
 import { REMOTES, SERVICES } from "../config/services";
 import {
-  alertUrl,
   catalogOf,
   dependencyNames,
   deployedAccountEmail,
@@ -285,7 +284,7 @@ new RemoteFile("keel-alert-config", {
   host: sshTarget,
   sshArgs,
   path: ALERT_CONFIG_PATH,
-  content: renderAlertConfig(catalog.alerts === undefined ? undefined : alertUrl(catalog.alerts)),
+  content: renderAlertConfig(INSTALLATION.alerts),
   mode: "644",
 });
 
