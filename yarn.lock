@@ -2828,7 +2828,7 @@ __metadata:
     dotenv-cli: "npm:^11.0.0"
     eslint: "npm:^10.8.0"
     prettier: "npm:^3.6.2"
-    pulumi: "npm:3.260.0"
+    pulumi: "npm:3.263.0"
     tsx: "npm:^4.20.0"
     typescript: "npm:^6.0.2"
     typescript-eslint: "npm:^8.46.0"
@@ -3622,12 +3622,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pulumi@npm:3.260.0":
-  version: 3.260.0
-  resolution: "pulumi@npm:3.260.0"
+"pulumi@npm:3.263.0":
+  version: 3.263.0
+  resolution: "pulumi@npm:3.263.0"
   bin:
     pulumi: run.js
-  checksum: 10/b8765a37ef703ceaf2ef0c38347714e48629bfe9066f71cb81ffefc9fee1851f9629ac03af39e3e22280ac1fb9c1a73e27e11e5a25154a1adb739df0f8d9240f
+  checksum: 10/ab106a3ec65a79a809c975314839ed019ca7ee3917c4159646d8e624f11f12b170535c429f4dad576e1ac9afe639aa4c7a49cafb9a8c62554cd09df6f22ba650
   languageName: node
   linkType: hard
 

@@ -18,6 +18,7 @@
  */
 
 import { createHash } from "node:crypto";
+import process from "node:process";
 
 import * as cloudflare from "@pulumi/cloudflare";
 import * as pulumi from "@pulumi/pulumi";
@@ -48,7 +49,12 @@ import { HOSTS_CONFIG_PATH, KEEL_HOSTS_SERVICE, renderHostsConfig } from "../ren
 import { MESH_INTERFACE } from "../render/mesh";
 import { isIpAddress, mountedShares } from "../render/mount";
 import { NFT_FORWARD_PATH, renderNftForward } from "../render/nftForward";
-import { NFT_SERVICES_PATH, publicProxyIngress, renderNftServices } from "../render/nftPorts";
+import {
+  NFT_SERVICES_PATH,
+  nftSetElements,
+  publicProxyIngress,
+  renderNftServices,
+} from "../render/nftPorts";
 import { NETWORK_NAMES, networkQuadlet } from "../render/quadlet";
 import CertSync from "./certSync";
 import KeelBackup from "./keelBackup";
@@ -56,6 +62,7 @@ import CifsMount from "./mount";
 import declareMesh from "./netbird";
 import { ImageDigest } from "./providers/imageDigest";
 import { BootstrapAccount, BootstrapConnector } from "./providers/netbirdAccount";
+import { PacketFilter } from "./providers/packetFilter";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedEnv } from "./providers/sealedEnv";
 import { SecretFile } from "./providers/secretFile";
@@ -102,6 +109,41 @@ const ageRecipient = config.get("ageRecipient") ?? host.ageRecipient;
  * house's vault name that every other deploy read without being told.
  */
 const vault = INSTALLATION.vault;
+
+/**
+ * Break glass: declare everything except the state that lives behind the mesh's
+ * own API.
+ *
+ * `src/infra/netbird.ts` resolves the coordinator's built-in `All` group with a
+ * provider *invoke*, which fires while this program is being evaluated — the
+ * same shape as the Cloudflare zone lookup, and the same cost. When the
+ * coordinator answers that is invisible. When it does not, the invoke's
+ * rejection fails the preview, and a failed preview means **no resource is
+ * applied at all** — including the ones that would start the coordinator. A
+ * board whose mesh is down cannot be deployed, and the deploy is the only way
+ * to bring the mesh up. That is a bootstrap with no fixed point, and rebuilding
+ * this board on new hardware walked straight into it.
+ *
+ * So the loop can be cut, from `yarn bootstrap -s <host>`, which sets this and
+ * passes the mesh's own resources to `--exclude` so that skipping to declare
+ * them is not read as a decision to delete them. It is deliberately not a
+ * Pulumi config value: config persists in the stack file, and a board left
+ * half-declared because somebody set a flag six months ago and forgot is worse
+ * than the failure this avoids. An environment variable lasts one command.
+ *
+ * It is not a staged subset in the sense `CLAUDE.md` refuses — nothing about
+ * which *services* deploy changes, and the ordering between them is still the
+ * graph's. What it defers is one service's API state, which is the one thing in
+ * this program that cannot be planned while that service is down.
+ */
+const SKIP_MESH = process.env.KEEL_SKIP_MESH === "1";
+if (SKIP_MESH) {
+  pulumi.log.warn(
+    "KEEL_SKIP_MESH=1 — the mesh's API state is not declared this run. Without --exclude " +
+      "covering its resources, this deploy deletes them. Use `yarn bootstrap` unless you " +
+      "know otherwise, and re-run `yarn deploy` once the coordinator answers.",
+  );
+}
 
 /**
  * What this host runs: the whole catalog, or exactly the entries its `services`
@@ -512,7 +554,7 @@ for (const spec of mine) {
       { dependsOn: [account] },
     );
   }
-  if (mesh !== undefined) {
+  if (mesh !== undefined && !SKIP_MESH) {
     // The public vhost, not the loopback the two resources above use: the
     // bridged provider is a plugin process running where this program runs, so
     // it dials the coordinator the way anything off the board does. That is the
@@ -657,11 +699,15 @@ if (publicNames.length > 0 || wanNames.length > 0) {
 // allowlist; `publicProxyIngress` derives that rather than the committed entry
 // declaring it, so a clone with no public name keeps :443 on the LAN.
 const publicProxy = publicProxyIngress(catalog, INSTALLATION.publicHosts);
-const portRules = renderNftServices(
+// The deployed set as the packet filter sees it: the proxy's entry with the
+// world-facing rule folded in where one is owed. Both the file and the kernel's
+// expected sets are rendered from this one list, so the two can never disagree
+// about which ports were asked for.
+const admitted =
   publicProxy === null
     ? mine
-    : mine.map((spec) => (spec.name === publicProxy.name ? publicProxy : spec)),
-);
+    : mine.map((spec) => (spec.name === publicProxy.name ? publicProxy : spec));
+const portRules = renderNftServices(admitted);
 const portsFile = new RemoteFile("nft-services", {
   host: sshTarget,
   sshArgs,
@@ -676,19 +722,22 @@ const portsFile = new RemoteFile("nft-services", {
 // the ruleset and re-reads it from `/etc/sysconfig/nftables.conf`, which re-runs
 // the `/etc/keel/nft.d/*.nft` glob — the drop-ins that remain, and only those.
 //
-// Triggered by the bodies themselves rather than by a list of them, so what
-// reloads the filter is a change in what the filter would read.
+// Triggered by what the *kernel* holds and not only by the bodies it was
+// rendered from. A file whose bytes are unchanged still has to reach a table
+// that was built before it existed — which is every board booting a fresh
+// image, and is how this board came up with :443 dropped behind a clean deploy.
+// `sets` is the deployed set's ports in the form the provider reads them back
+// in; `trigger` is the bodies, for the forward chain's rules, which are rules
+// rather than set elements and have nothing in a set to be compared against.
 //
 // The unit belongs to the image, so this resource reloads it and never stops it:
-// `action: "reload"` also means a destroy leaves the filter running.
-new SystemdUnit(
+// the provider's `delete` leaves the filter running.
+new PacketFilter(
   "nftables",
   {
     host: sshTarget,
     sshArgs,
-    unit: "nftables.service",
-    quadlet: false,
-    action: "reload",
+    sets: nftSetElements(admitted),
     trigger: createHash("sha256").update([portRules, forwardRules].join("\n")).digest("hex"),
   },
   { dependsOn: [portsFile, forwardFile] },

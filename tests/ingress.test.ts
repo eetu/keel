@@ -10,7 +10,12 @@ import { INSTALLATION } from "../src/config/installation";
 import { SERVICES } from "../src/config/services";
 import { catalogOf, runSetup, subdomainOf } from "../src/config/spec";
 import { renderAll } from "../src/render";
-import { NFT_SERVICES_PATH, renderNftPorts, renderNftServices } from "../src/render/nftPorts";
+import {
+  NFT_SERVICES_PATH,
+  nftSetElements,
+  renderNftPorts,
+  renderNftServices,
+} from "../src/render/nftPorts";
 import { chainMiddlewares, routerMiddlewares } from "./routeYaml";
 
 const CATALOG = catalogOf(SERVICES);
@@ -90,6 +95,58 @@ describe("the proxy's routes", () => {
       const own = [...route.matchAll(/^ {4}([\w-]+):$/gm)].map((m) => m[1]);
       for (const name of [...routerMiddlewares(route), ...chainMiddlewares(route)]) {
         expect([...shared, ...own], `${spec.name}: ${name}`).toContain(name);
+      }
+    }
+  });
+});
+
+describe("what the kernel is checked against", () => {
+  /** Two entries overlapping on a port and a set, plus one that asks for nothing. */
+  const specs = [
+    { ...SERVICES[0], name: "b", ingress: { lanTcp: [443, 53], meshUdp: [53] } },
+    { ...SERVICES[0], name: "a", ingress: { lanTcp: [53, 22000] } },
+    { ...SERVICES[0], name: "c", ingress: undefined },
+  ];
+
+  it("names every set the image declares, empty ones included", () => {
+    // An empty set is the whole point of the comparison. A board whose ports
+    // were never applied answers with nothing in `lan_tcp`, and a desired string
+    // that left an unused set out would match that answer exactly — which is the
+    // silence this resource exists to break.
+    const lines = nftSetElements(specs).split("\n");
+    expect(lines.map((line) => line.slice(0, line.indexOf("=")))).toEqual([
+      "lan_tcp",
+      "lan_udp",
+      "mesh_tcp",
+      "mesh_udp",
+      "world_tcp",
+      "world_udp",
+    ]);
+    expect(lines).toContain("world_tcp=");
+  });
+
+  it("is the union, deduplicated and sorted, whatever order the catalog is in", () => {
+    // The file is sorted by service and this by port, and they have to agree
+    // about the set either way: this value is compared against what a kernel
+    // hands back, where a service's name has never existed.
+    expect(nftSetElements(specs)).toContain("lan_tcp=53, 443, 22000");
+    expect(nftSetElements(specs)).toBe(nftSetElements([...specs].reverse()));
+  });
+
+  it("asks for exactly the ports the file writes", () => {
+    // Two renderings of one list, and nothing but this holds them together. A
+    // drift between them is a resource asking for a port the file never wrote,
+    // which reloads the filter on every deploy and never converges.
+    const file = renderNftServices(specs);
+    for (const line of nftSetElements(specs).split("\n")) {
+      const set = line.slice(0, line.indexOf("="));
+      const ports = line.slice(line.indexOf("=") + 1);
+      if (ports === "") {
+        expect(file, set).not.toContain(`set ${set} `);
+        continue;
+      }
+      for (const port of ports.split(", ")) {
+        expect(file, `${set} ${port}`).toMatch(new RegExp(`set ${set} \\{[^}]*\\b${port}\\b`));
       }
     }
   });

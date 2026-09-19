@@ -23,44 +23,18 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { CLOUDFLARE_FIELD, CLOUDFLARE_ITEM } from "../src/config/cloudflare";
 import { INSTALLATION } from "../src/config/installation";
 import { readField } from "../src/infra/vault";
+import { dotenv, repo } from "./dotenv";
 
 /**
  * The `cloudflare` item is a login whose password field is the API token — the
  * same field the proxy's DNS-01 challenge reads, so one item serves both.
  */
-
-const repo = new URL("..", import.meta.url);
-
-/**
- * `.env` as a map. Values already in the process environment win, which is what
- * lets one shell override the file for a single run.
- */
-function dotenv(path: URL): Record<string, string> {
-  let body: string;
-  try {
-    body = readFileSync(path, "utf8");
-  } catch {
-    // A machine that exports the passphrase some other way has no file here,
-    // and Pulumi says what is missing better than a guess would.
-    return {};
-  }
-  const values: Record<string, string> = {};
-  for (const line of body.split("\n")) {
-    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (match === null) continue;
-    // A quoted value is unquoted the way dotenv does it — the passphrase is
-    // pasted from the vault, and a pair of quotes around it is not part of it.
-    values[match[1]] = match[2].replace(/^(["'])(.*)\1$/, "$2");
-  }
-  return values;
-}
 
 // One `op` call before Pulumi starts anything. Pulumi fans its resources out and
 // runs their vault reads concurrently, so several would race the first Touch ID
@@ -120,7 +94,7 @@ const child = spawn(
   {
     cwd: fileURLToPath(repo),
     stdio: "inherit",
-    env: { ...dotenv(new URL(".env", repo)), ...process.env, CLOUDFLARE_API_TOKEN: token },
+    env: { ...dotenv(), ...process.env, CLOUDFLARE_API_TOKEN: token },
   },
 );
 
