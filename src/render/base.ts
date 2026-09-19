@@ -1,4 +1,5 @@
-import { ADMIN_GROUP, JOURNAL_MAX_USE, MODPROBE_DENY } from "../config/keel";
+import { GIT_REPOS_DIR } from "../config/backup";
+import { ADMIN_GROUP, ADMIN_USER, JOURNAL_MAX_USE, MODPROBE_DENY } from "../config/keel";
 import { MASKED_UNITS } from "../config/versions";
 import { dedent, file, merge, symlink, type Tree } from "./tree";
 
@@ -209,9 +210,18 @@ function sudoers(): Tree {
 function tmpfiles(): Tree {
   return file(
     "/usr/lib/tmpfiles.d/keel.conf",
+    // `GIT_REPOS_DIR` is where a bare repository goes, owned by the admin
+    // account because the push arrives as that user over ssh and `git-core` is a
+    // package rather than a service. Declared here rather than deployed: there
+    // is no unit to mkdir it, it holds no configuration to write, and the one
+    // thing it needs is to exist with the right owner on every boot — which is
+    // exactly what tmpfiles is. What goes *inside* it is nobody's declaration:
+    // `git init --bare` is the operator's, and a rebuilt board gets its
+    // repositories back from the restic snapshot that already covers this path.
     dedent(`
       d /etc/secrets 0700 root root - -
       d /var/lib/keel 0755 root root - -
+      d ${GIT_REPOS_DIR} 0750 ${ADMIN_USER} ${ADMIN_USER} - -
     `),
   );
 }

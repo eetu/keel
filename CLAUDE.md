@@ -387,6 +387,41 @@ than against a running container. `Notify=healthy` is what turns a check into
 the start job's verdict, and `TimeoutStartSec=600` is what pays for it — a first
 start also builds gravity.
 
+**What that chain costs at boot, and what it does not.** The same
+`Notify=healthy` runs on every reboot, where the certificate already exists and
+nothing needs sequencing — so it is worth knowing what it buys there and what it
+spends. Measured on the Pi 4 after a `bootc` upgrade, which is the slow case:
+
+```
+1.404s kernel + 6.125s initrd + 2min 57.187s userspace = 3min 4.717s
+network.target @9.3s → unbound @22.2s → greenboot @23.9s → boot-complete @23.9s
+  → pihole @23.9s +55.9s → traefik @1m19.8s +50.1s → kanidm @2m10.2s +8.9s
+    → scribe → scribe-shelf @2m20.4s +32.7s → multi-user.target @2m53s
+```
+
+Read it in three parts. **The board is usable long before the number**: ssh
+answers at about ten seconds, the resolver at twenty-two, and greenboot has
+already passed by twenty-four — `boot-complete.target` does not wait for a single
+container, which is why a rollback verdict is never held up by an app. **The
+chain is three edges deep**, resolver → proxy → identity, and nothing in the
+catalog adds a fourth: only seven of the twenty-four containers declare a health
+check at all, and the rest complete their start job when the container starts.
+**What the chain actually delays is Kanidm**, so single sign-on is unavailable
+for roughly two minutes after a reboot while everything else is already serving.
+
+The time is the price of each check rather than the number of them. Traefik was
+serving at 7.7 s and its unit went active at 50 s, because `traefik healthcheck`
+re-execs a 167 MB Go binary — 39 s with cold page cache against 0.5 s warm, and
+at boot every page is cold while twenty-three other containers fault theirs in
+over the same disk. A cheaper check is worth more here than a shorter chain, and
+shortening the chain would cost the one-`pulumi up` property above for nothing.
+
+Deliberately **not** chained: the apps behind the gate. Nothing orders them after
+oauth2-proxy or Kanidm, so they answer before anyone can sign in to them. That is
+the same reasoning as "a vhost does not depend on the proxy" — a route file needs
+nothing running, an app that is up before its login is not broken, and the edge
+would move every app behind the two slowest units on the board.
+
 **A job that runs and exits is a service with a schedule.** `schedule` on a
 `ServiceSpec` is an `OnCalendar=` expression, and stating it is the whole of the
 difference — a scheduled entry is not a kind of its own, so everything already
