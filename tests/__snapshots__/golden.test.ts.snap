@@ -2,14 +2,14 @@
 
 exports[`'kanidm' > prices the same caps on every profile 1`] = `
 "[Service]
-MemoryHigh=48M
-MemoryMax=64M
+MemoryHigh=96M
+MemoryMax=128M
 [Service]
-MemoryHigh=48M
-MemoryMax=64M
+MemoryHigh=96M
+MemoryMax=128M
 [Service]
-MemoryHigh=48M
-MemoryMax=64M
+MemoryHigh=96M
+MemoryMax=128M
 "
 `;
 
@@ -276,14 +276,14 @@ hosts /var/lib/pihole/hosts/keel.list mode=644 restarts=false"
 
 exports[`'traefik' > prices the same caps on every profile 1`] = `
 "[Service]
-MemoryHigh=96M
-MemoryMax=128M
+MemoryHigh=192M
+MemoryMax=256M
 [Service]
-MemoryHigh=96M
-MemoryMax=128M
+MemoryHigh=192M
+MemoryMax=256M
 [Service]
-MemoryHigh=96M
-MemoryMax=128M
+MemoryHigh=192M
+MemoryMax=256M
 "
 `;
 
