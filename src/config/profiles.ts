@@ -90,7 +90,8 @@ export function selectProfile(ramMb: number): Profile {
 
 export type ResolvedMemory = {
   maxMb: number;
-  highMb: number;
+  /** Only where an entry asked for one — see `priceMemory`. */
+  highMb?: number;
   tier: Tier;
 };
 
@@ -104,11 +105,37 @@ function maxUnder(memory: ServiceMemory, profile: Profile): number {
  * arithmetic can be checked against a declaration written on the spot: whether
  * any catalog happens to hold a service that scales is a fact about one
  * installation, and the pricing rule is not.
+ *
+ * **`MemoryHigh` is stated, never derived**, and that is a correction rather
+ * than a preference. It used to be `max * 0.75`, which reads as prudent and is
+ * wrong for what runs here: a cgroup is charged its executable's text as _file_
+ * pages, and these services are Go and Rust binaries whose text is nearly all of
+ * what they hold — `anon 0.1 MB / file 29 MB` for the gate, `anon 0.02 / file 48`
+ * for the notifier, `file 141` for the proxy. Three quarters of a cap sized from
+ * a measurement of the same binary therefore lands *under* the binary, and
+ * `MemoryHigh` is not advice: the kernel reclaims to hold the line, evicting text
+ * the process faults straight back in. Measured on the 1 GB board, the gate alone
+ * was reclaiming 528 MB every twenty seconds while sitting at 34 MB against a
+ * 36 MB ceiling; removing its `MemoryHigh` took that to zero and left it using
+ * 8.5 MB. The board reads 725 MB/s off the disk at idle for this and nothing
+ * else.
+ *
+ * So the ceiling that remains is `MemoryMax`, which kills rather than throttles,
+ * and that is the better failure here: a kill leaves a failed unit the
+ * five-minute poller reports to a phone, where throttling is invisible and
+ * degrades every service on the board at once. `keel-core.slice`'s `MemoryLow`
+ * still protects the core tier from reclaim, and `keel-apps.slice` still carries
+ * a `MemoryHigh` — a whole tier being asked to give way under real pressure is
+ * what that setting is for, and it is the one place the reclaim it forces is the
+ * point.
+ *
+ * `high` on an entry stays, for a service that genuinely wants throttling before
+ * its ceiling. Nothing in the committed catalog does; reach for it with a
+ * measurement in hand.
  */
 export function priceMemory(memory: ServiceMemory, profile: Profile): ResolvedMemory {
   const maxMb = maxUnder(memory, profile);
-  const highMb = memory.high !== undefined ? memory.high : Math.round(maxMb * 0.75);
-  return { maxMb, highMb, tier: memory.tier };
+  return { maxMb, highMb: memory.high, tier: memory.tier };
 }
 
 /** A named service's caps under a given profile. */
