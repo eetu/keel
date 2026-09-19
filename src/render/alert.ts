@@ -1,5 +1,5 @@
 /**
- * Failure alerts, from the image, into whichever service claims the alert sink.
+ * Failure alerts, from the image, to wherever the installation says.
  *
  * A failed unit on this board used to be discovered by somebody looking: the
  * nightly backup can die at four in the morning and stay dead until a person
@@ -8,8 +8,13 @@
  * posts each new one once — with the unit's own journal tail, which is the
  * message a person would otherwise ssh in to read — and posts once more when it
  * recovers. What it posts to is `/etc/keel/alert.conf`, written by the deploy
- * layer from the catalog entry that declares the `alerts` role; a board with no
- * such entry has an empty file and the poll says nothing.
+ * layer from `INSTALLATION.alerts`; a board whose installation names no sink has
+ * an empty file and the poll says nothing.
+ *
+ * The sink is deliberately not a service on this board. One that is cannot
+ * report the failure that matters most — this fleet's board fell off the network
+ * and took its own notifier with it, so the alert nobody received was the only
+ * one worth sending. An off-board address survives the host it watches.
  *
  * Polling rather than `OnFailure=`, and that is the decision this file rests on.
  * A quadlet carries `Restart=always`, and a container that crashes on every
@@ -26,6 +31,7 @@
  * every boot is one alert, not one per boot.
  */
 
+import { type AlertSink } from "../config/types";
 import { dedent, file, merge, script, type Tree } from "./tree";
 
 /** Read by the script; written by the deploy layer as `KEY=VALUE` lines. */
@@ -41,10 +47,10 @@ export const KEEL_ALERT_TIMER = "keel-alert.timer";
  * is — a present-and-empty file and an absent one have to converge alike, and
  * the script treats both as "say nothing".
  */
-export function renderAlertConfig(url: string | undefined): string {
-  return url === undefined
-    ? "# No catalog entry claims the alerts role, so failures are not posted anywhere.\n"
-    : `NTFY_URL=${url}\n`;
+export function renderAlertConfig(sink: AlertSink | undefined): string {
+  return sink === undefined
+    ? "# This installation names no alert sink, so failures are not posted anywhere.\n"
+    : `NTFY_URL=${sink.url.replace(/\/+$/, "")}/${sink.topic}\n`;
 }
 
 function alertScript(): Tree {

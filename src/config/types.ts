@@ -135,6 +135,20 @@ export type Mesh = {
 };
 
 /**
+ * An ntfy server and the topic this installation's failures land in.
+ *
+ * Two fields rather than one URL because the two readers want it apart: the
+ * poller posts to `<url>/<topic>`, and gatus's own alerting configuration takes
+ * the server and the topic as separate keys.
+ */
+export type AlertSink = {
+  /** Server origin, no trailing slash — `https://ntfy.sh`, or a LAN address. */
+  url: string;
+  /** What a phone subscribes to, and what anyone who knows it can read. */
+  topic: string;
+};
+
+/**
  * The SMB share the restic repository lives on. Installation data: it names one
  * network's NAS, so it lives in `installation.ts` and is read by `src/infra/` alone.
  */
@@ -268,6 +282,30 @@ export type Installation = {
    * expose it, and there is almost never a reason to.
    */
   publicHosts: readonly string[];
+  /**
+   * Where a failure is posted: the image's five-minute poller, and the status
+   * page's own checks, both send here.
+   *
+   * Installation data rather than a role a catalog entry claims, and the
+   * difference is the point. A sink running *on the board it watches* cannot
+   * report the one failure that matters most — this fleet's board fell off the
+   * network entirely and the notifier went with it, so the alert nobody got was
+   * the only one worth sending. An address here can be a hosted service, which
+   * survives the host, and reaches a phone by push rather than by being visited.
+   *
+   * ntfy's protocol either way: `POST <url>/<topic>` with the message as the
+   * body, which is what both the poller and gatus speak. A board that would
+   * rather keep its own sink states its own address — the shape does not care,
+   * and that is why the role it replaced is gone.
+   *
+   * The topic is the credential: anyone who knows it can read the alerts and
+   * post to them. Keep it long and random, and remember this file is gitignored
+   * for reasons like it.
+   *
+   * Absent means silence by design — the poller writes an empty config and says
+   * nothing, which is what a board with nowhere to report to should do.
+   */
+  alerts?: AlertSink;
   backup: BackupTarget;
   /**
    * The SMB shares this network has. A host mounts the ones something it deploys
