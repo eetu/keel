@@ -143,6 +143,7 @@ image/test.sh [tag]           # tier 2: bootc lint, unit syntax, generator profi
 image/card.sh <host>          # build, shrink, add the Pi firmware and keel.conf, boot-test
 yarn preview -s <host>        # pulumi preview --refresh, vault- and .env-loaded
 yarn deploy -s <host>         # pulumi up --refresh, vault- and .env-loaded
+yarn bootstrap -s <host>      # the same, for a board whose coordinator is down
 ```
 
 The last two go through `scripts/pulumi.ts`, which warms the 1Password session,
@@ -835,9 +836,9 @@ backend`) unless it waits. No `Conflicts=` between the units — that would kill
   longer names a port leaves that port in the kernel's set. What closes it is
   `nftables.service`'s `ExecReload`, which re-reads `/etc/sysconfig/nftables.conf`
   — a file whose first act is `flush table inet keel`, then the base table, then
-  the whole `/etc/keel/nft.d/*.nft` glob, in one transaction. One `SystemdUnit`
-  in the program does that reload, triggered by the body of the file it reads.
-  The flush is keel's table and nothing else, and the image overrides the stock
+  the whole `/etc/keel/nft.d/*.nft` glob, in one transaction. One resource in
+  the program does that reload — `PacketFilter`, and what triggers it is the
+  next trap. The flush is keel's table and nothing else, and the image overrides the stock
   unit's `ExecReload` to make it so: the stock `flush ruleset` empties netavark's
   table too, which holds the port forward of every running bridge container, so
   a deploy that reloaded the filter left every published port hanging until
@@ -852,6 +853,23 @@ backend`) unless it waits. No `Conflicts=` between the units — that would kill
   of "no rules" that became an absent file would be a deletion again, and the
   reload would re-read the copy still on disk. Present and empty is what closes
   a port; absent is what re-opens it.
+- **The reload is triggered by what the kernel holds, not by the file it was
+  rendered from.** Those are two different things, and a deploy that only
+  compares files cannot tell them apart. A board booting a fresh image builds
+  `table inet keel` from the glob at boot — before the deploy's `50-services.nft`
+  exists — so the port sets come up empty; the deploy then writes that file with
+  bytes _identical_ to the previous installation's, a trigger hashed from it does
+  not change, no reload is planned, and the board sits with :443 dropped behind a
+  `pulumi up` that reported success. The whole LAN's proxy was unreachable and
+  nothing in the plan said so. So `PacketFilter`
+  (`src/infra/providers/packetFilter.ts`) has a real `read`: it asks the board
+  for the table with `nft -j` and answers with the sets' elements, and its input
+  is the same elements rendered from the deployed set (`nftSetElements`). A
+  difference is a reload, whether it came from an edited catalog, a hand-flushed
+  table or a boot that happened before the files did. `trigger` stays beside it
+  for the half no set can answer for — `20-forward-open.nft` writes rules, and a
+  rule has no set to be compared against. `delete` leaves the filter running, for
+  the reason the `SystemdUnit` it replaced did.
 - **A memory cap has to hold the binary, and a Go or Rust binary is most of
   what the cgroup counts.** A cgroup charges an executable's own text to it as
   _file_ pages, so traefik's 167 MB binary is what its `memory.current` is
@@ -880,6 +898,25 @@ backend`) unless it waits. No `Conflicts=` between the units — that would kill
   name and `rename(2)` is atomic, so the concurrency is harmless. A new script
   under `/usr/lib/keel` that a provider invokes per-resource has the same
   problem waiting.
+- **A bridged provider's invoke fires during evaluation, so a service that is
+  down blocks the deploy that would start it.** `src/infra/netbird.ts` resolves
+  the coordinator's built-in `All` group with `getGroupOutput`, and an invoke
+  runs whenever the program is evaluated — `preview` as much as `up`. When it
+  fails, the preview fails, and a failed preview applies **nothing**, including
+  the quadlet that would bring the coordinator back. That is a bootstrap with no
+  fixed point, and it is where a rebuilt board lands. `yarn bootstrap -s <host>`
+  is the way out: it sets `KEEL_SKIP_MESH=1`, which stops the program declaring
+  the mesh's API state, and passes every one of those resources to `--exclude`,
+  read out of the stack's own state — because not declaring them without
+  excluding them is a run that _deletes_ a live mesh's groups, keys and routes,
+  and a NetBird group deleted and recreated gives every peer that has ever joined
+  a subject the coordinator has never seen. It refreshes before it updates, and
+  excludes from that refresh the resources whose `read` is a call rather than a
+  look at a file (`*-account`, `*-connector`) — those are the reads that time out
+  on a board not yet running them. Then `yarn deploy` once the coordinator
+  answers. The flag is an environment variable and deliberately not Pulumi
+  config: config persists in the stack, and a board left half-declared because
+  somebody set a flag months ago is worse than the failure it avoids.
 - **A first start pulls the image inside `ExecStart`, and systemd's default
   start timeout is 90 seconds.** A quadlet with `Pull=missing` (the quadlet
   default) pulls the image on the first `systemctl start`; podman gives itself
@@ -1085,7 +1122,21 @@ header`, then one `error serializing property "zoneId"` per record, and
   copy the state holds, so a fix to `run()` applies to a resource only once
   something else updates it. What holds regardless is the client's own limit —
   `yarn deploy` and `yarn preview` pass `--parallel 4`, and a `SystemdUnit` read
-  opens two sessions, so at most eight are ever open against sshd's default ten.
+  is one session, so at most four are ever open against sshd's default ten.
+- **A refresh is load on the board, and the load used to come back as work.** Two
+  separate things, and they compounded. The first: a `SystemdUnit` read asked
+  three questions in three ssh sessions, which is three sshd forks, three sudos
+  and three `systemctl`s per unit — a couple of hundred resources' worth inside a
+  minute, on a board with half a gigabyte to spare. That is enough to push it
+  into swap, and a board in swap answers slowly. The second, and the one that
+  made it a loop: a health check that times out under that load leaves its unit
+  `activating`, the refresh recorded that, `diff` called anything but `active`
+  drift, and the `up` that followed **restarted a service whose start job was
+  still running** — which re-execs a large binary on a board that has no memory
+  to spare, so the next unit's check times out too. So `stateOf` is one session
+  now, and `activating`, `deactivating` and `reloading` are not drift; `inactive`
+  and `failed` still are. A bare `preview` reads nothing and costs the board
+  nothing, which is the right tool for "what does this catalog edit do".
 - **A resource the refresh forgot is re-adopted by an idempotent `create`, and
   the creates are idempotent on purpose.** `RemoteFile.create` writes the same
   bytes, `SealedEnv.create` re-seals to the same plaintext, `SecretFile.create`

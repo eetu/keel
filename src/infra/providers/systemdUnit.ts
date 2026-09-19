@@ -82,19 +82,53 @@ const apply = async (inputs: SystemdUnitInputs, restarting: boolean): Promise<vo
   await runOk(inputs.host, argv, undefined, inputs.sshArgs);
 };
 
-const stateOf = async (inputs: SystemdUnitInputs): Promise<{ active: string; enabled: string }> => {
+/**
+ * Whether the manager knows the unit, and what it says about it — in one ssh
+ * session rather than three.
+ *
+ * A refresh of this stack reads a couple of hundred resources, and this is the
+ * read most of them are. Three sessions each meant three sshd forks, three
+ * sudos and three systemctls per unit, several hundred short-lived processes
+ * inside a minute — on a board with half a gigabyte to spare that is enough to
+ * push it into swap, and a board in swap answers `is-active` slowly enough that
+ * the next unit's health check times out. The questions are independent and the
+ * answers are three lines, so there was never a reason for them to be three
+ * connections.
+ *
+ * `existing` is first because it is the one whose *status* used to carry the
+ * meaning: a unit systemd has never heard of is gone, which is a different
+ * thing from one that is merely stopped. Inside one shell that distinction has
+ * to be printed rather than exited with, since only the last command's status
+ * survives.
+ */
+const stateOf = async (
+  inputs: SystemdUnitInputs,
+): Promise<{ existing: boolean; active: string; enabled: string }> => {
   assertSafeUnit(inputs.unit);
-  const [active, enabled] = await Promise.all([
-    run(inputs.host, ["systemctl", "is-active", inputs.unit], undefined, inputs.sshArgs),
-    run(inputs.host, ["systemctl", "is-enabled", inputs.unit], undefined, inputs.sshArgs),
-  ]);
-  return { active: active.stdout.trim(), enabled: enabled.stdout.trim() };
+  const unit = inputs.unit;
+  const result = await run(
+    inputs.host,
+    [
+      "sh",
+      "-c",
+      // `|| true` on each: systemctl exits non-zero for a unit that is not
+      // active or not enabled, which is an answer and not a failure.
+      `systemctl cat ${unit} >/dev/null 2>&1 && echo yes || echo no; ` +
+        `systemctl is-active ${unit} 2>/dev/null || true; ` +
+        `systemctl is-enabled ${unit} 2>/dev/null || true`,
+    ],
+    undefined,
+    inputs.sshArgs,
+  );
+  const [existing = "", active = "", enabled = ""] = result.stdout.split("\n").map((l) => l.trim());
+  return { existing: existing === "yes", active, enabled };
 };
 
 const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
   async create(inputs) {
     await apply(inputs, false);
-    return { id: `${inputs.host}:${inputs.unit}`, outs: { ...inputs, ...(await stateOf(inputs)) } };
+    const { existing: _existing, ...state } = await stateOf(inputs);
+    return { id: `${inputs.host}:${inputs.unit}`, outs: { ...inputs, ...state } };
   },
 
   async read(id, props) {
@@ -109,14 +143,9 @@ const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
     assertSafeUnit(known.unit);
     // A unit systemd has never heard of is gone, not merely stopped — that is
     // the difference between drift and deletion.
-    const exists = await run(
-      known.host,
-      ["systemctl", "cat", known.unit],
-      undefined,
-      known.sshArgs,
-    );
-    if (exists.status !== 0) return { id: undefined };
-    return { id, props: { ...known, ...(await stateOf(known)) } };
+    const { existing, ...state } = await stateOf(known);
+    if (!existing) return { id: undefined };
+    return { id, props: { ...known, ...state } };
   },
 
   async check(_olds, news) {
@@ -146,7 +175,23 @@ const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
     // so this rule applied to one would make every refresh report drift and every
     // `up` run the job — a forecast fetched, a scan performed, a POST sent,
     // because somebody previewed the stack.
-    const stopped = news.action !== "load" && olds.active !== undefined && olds.active !== "active";
+    //
+    // And `activating` is not stopped. A unit whose start job is still running
+    // is mid-flight, not dead — restarting it kills the start to begin another,
+    // which is the worst thing to do to a board that is slow because it is
+    // already busy. That is a real loop rather than a hypothetical: a health
+    // check that times out under load leaves the unit `activating`, a refresh
+    // records it, the `up` that follows restarts the service, the restart
+    // re-execs a large binary on a board with no memory to spare, and the next
+    // unit's check times out too. `deactivating` and `reloading` are
+    // transitional for the same reason. What counts as drift is a unit that has
+    // stopped being: `inactive` or `failed`.
+    const transitional = ["activating", "deactivating", "reloading"];
+    const stopped =
+      news.action !== "load" &&
+      olds.active !== undefined &&
+      olds.active !== "active" &&
+      !transitional.includes(olds.active);
     return {
       changes:
         olds.trigger !== news.trigger ||
@@ -160,7 +205,8 @@ const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
 
   async update(id, _olds, news) {
     await apply(news, true);
-    return { outs: { ...news, ...(await stateOf(news)) } };
+    const { existing: _existing, ...state } = await stateOf(news);
+    return { outs: { ...news, ...state } };
   },
 
   async delete(_id, props) {

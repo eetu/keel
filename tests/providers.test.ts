@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { SERVICES } from "../src/config/services";
 import { secretsPath } from "../src/config/spec";
+import { type PacketFilterInputs, packetFilterProvider } from "../src/infra/providers/packetFilter";
 import { assertWritablePath } from "../src/infra/providers/remoteFile";
 import { assertCiphertext } from "../src/infra/providers/secretFile";
 import { type SystemdUnitInputs, systemdUnitProvider } from "../src/infra/providers/systemdUnit";
@@ -147,10 +148,17 @@ describe("a unit whose steady state is inactive", () => {
    * records what it was handed, so what the provider *runs* is the assertion. A
    * `load` unit is defined by the command that is absent from that list.
    */
-  const withRecordingSsh = async (body: (calls: () => readonly string[]) => Promise<void>) => {
+  const withRecordingSsh = async (
+    body: (calls: () => readonly string[]) => Promise<void>,
+    /** What the remote command prints, for the calls that read an answer. */
+    answer = "",
+  ) => {
     const dir = mkdtempSync(`${tmpdir()}/keel-ssh-`);
     const log = `${dir}/calls`;
-    writeFileSync(`${dir}/ssh`, `#!/bin/sh\necho "$@" >> ${log}\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(`${dir}/answer`, answer);
+    writeFileSync(`${dir}/ssh`, `#!/bin/sh\necho "$@" >> ${log}\ncat ${dir}/answer\nexit 0\n`, {
+      mode: 0o755,
+    });
     const previous = process.env.PATH;
     process.env.PATH = `${dir}:${previous}`;
     try {
@@ -203,14 +211,44 @@ describe("a unit whose steady state is inactive", () => {
     // unit — never whether it is running. A read that took inactive for gone
     // would drop a live resource from state on every refresh and re-create it on
     // the next `up`, which for a one-shot is a run nobody asked for.
-    await withRecordingSsh(async () => {
+    await withRecordingSsh(async (calls) => {
       const found = await systemdUnitProvider.read!("nowhere:job.service", {
         ...job,
         active: "inactive",
         enabled: "generated",
       });
       expect(found.id).toBe("nowhere:job.service");
-    });
+      expect(found.props).toMatchObject({ active: "inactive", enabled: "generated" });
+      // One session, not three. A refresh of this stack is a couple of hundred
+      // of these, and three sshd forks apiece is what turns a read of the
+      // board into load on the board.
+      expect(calls()).toHaveLength(1);
+    }, "yes\ninactive\ngenerated\n");
+  });
+
+  it("does not call a start job that is still running drift", async () => {
+    // A health check that times out on a busy board leaves the unit
+    // `activating`. Treating that as stopped restarts a service mid-start —
+    // which is the one thing that makes a loaded board worse, and it feeds
+    // itself: the restart re-execs a large binary, the next unit's check then
+    // times out too.
+    const service = { ...job, action: undefined };
+    for (const active of ["activating", "deactivating", "reloading"]) {
+      expect(
+        (await systemdUnitProvider.diff!("id", { ...service, active, enabled: "enabled" }, service))
+          .changes,
+        active,
+      ).toBe(false);
+    }
+    expect(
+      (
+        await systemdUnitProvider.diff!(
+          "id",
+          { ...service, active: "failed", enabled: "enabled" },
+          service,
+        )
+      ).changes,
+    ).toBe(true);
   });
 
   it("does not read a finished run as drift, while a stopped service still is", async () => {
@@ -235,6 +273,45 @@ describe("a unit whose steady state is inactive", () => {
         enabled: "generated",
       });
       expect(calls().join("\n")).toContain("systemctl stop job.service");
+    });
+  });
+
+  describe("the packet filter", () => {
+    const filter: PacketFilterInputs = {
+      host: "nowhere",
+      sets: "lan_tcp=53, 443\nworld_tcp=443",
+      trigger: "abc",
+    };
+
+    it("reloads when the kernel holds less than the catalog asks for", async () => {
+      // The failure this resource was written for. A board that boots a fresh
+      // image builds its table before the deploy's drop-in exists, so the sets
+      // come up empty; the deploy then writes a file whose bytes are identical
+      // to the last installation's, so a trigger hashed from the file does not
+      // change and no reload is planned. The proxy's :443 stayed dropped behind
+      // a deploy that reported success.
+      const stale = { ...filter, applied: "lan_tcp=\nworld_tcp=" };
+      expect((await packetFilterProvider.diff!("id", stale, filter)).changes).toBe(true);
+    });
+
+    it("is quiet when the kernel already holds them", async () => {
+      // The other half: a reload is a flush and a rebuild of the table the
+      // machine is filtered by, so doing one on every deploy for no change is
+      // not free and not something to shrug at.
+      const applied = { ...filter, applied: filter.sets };
+      expect((await packetFilterProvider.diff!("id", applied, filter)).changes).toBe(false);
+    });
+
+    it("leaves the filter running when the declaration goes away", async () => {
+      // The unit is the image's. A `pulumi destroy` removes what Pulumi put on
+      // the board; turning off the packet filter is not among those things.
+      await withRecordingSsh(async (calls) => {
+        await packetFilterProvider.delete!("nowhere:nftables", {
+          ...filter,
+          applied: filter.sets,
+        });
+        expect(calls()).toEqual([]);
+      });
     });
   });
 });

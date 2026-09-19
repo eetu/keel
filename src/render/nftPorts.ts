@@ -126,6 +126,37 @@ export function publicProxyIngress(
   };
 }
 
+/**
+ * The same ports as the file above, written as what the *kernel* should hold.
+ *
+ * The file and the kernel are two different things, and a deploy that only
+ * compares files cannot tell them apart. `50-services.nft` is an input to the
+ * reload; the sets in `table inet keel` are the result of one. A board rebuilt
+ * from a fresh image boots with those sets empty — `nftables.service` reads the
+ * glob at boot and the deploy's drop-in is not in it yet — and then the deploy
+ * writes a file whose bytes are *identical* to the ones the old installation
+ * had. Nothing in the file changed, so a trigger hashed from it does not
+ * change, so no reload runs, and the kernel keeps admitting nothing while every
+ * route, record and health check says the service is up. That is exactly what
+ * happened on the migration to this board: :443 was closed and the whole LAN's
+ * proxy was unreachable, with a clean `pulumi up` behind it.
+ *
+ * So the resource that reloads the filter compares this against what the board
+ * answers, rather than against the file it was rendered from. One line per set
+ * the image declares, every set named even when it is empty, ports sorted
+ * numerically — the same canonical form the provider builds out of `nft -j`, so
+ * the comparison is string equality and any difference is a reload.
+ */
+export function nftSetElements(specs: readonly ServiceSpec[]): string {
+  const union = new Map<string, number[]>(SETS.map(([, set]) => [set, []]));
+  for (const spec of specs) {
+    for (const [key, set] of SETS) {
+      union.get(set)!.push(...(spec.ingress?.[key] ?? []));
+    }
+  }
+  return SETS.map(([, set]) => `${set}=${elements(union.get(set)!)}`).join("\n");
+}
+
 export function renderNftServices(specs: readonly ServiceSpec[]): string {
   const blocks = [...specs]
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
