@@ -190,7 +190,7 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     description: "Identity provider — the OIDC issuer everything else trusts",
     // 1.11.1
     image:
-      "docker.io/kanidm/server@sha256:7c3d7ed868e91f78c24a7fb9c548876563b375a4203021b730d58369b97ad154",
+      "docker.io/kanidm/server@sha256:e45f00bd354c1fc1c06a4be484b4e87b094c431e78280f1d19e911815e63efb5",
     port: KANIDM_PORT,
     // Same shape as Traefik's above: 45 MB of the 47 is the Rust binary's own
     // text, and a 48 MB MemoryHigh sat underneath it — 9,465 throttle events
