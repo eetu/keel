@@ -46,7 +46,19 @@ function fileLine(file: ServiceFile): string {
  * committed entry to a digest rather than a moving tag in the first place.
  */
 function withoutDigest(body: string): string {
-  return body.replace(/@sha256:[0-9a-f]{64}/g, "@sha256:<digest>");
+  return (
+    body
+      // A version tag *beside* a digest goes with it: the two move together on a
+      // dependency PR and both are one line of the catalog diff. Masked as a
+      // pair rather than separately, so a reference that lost its digest still
+      // shows its tag here and fails.
+      .replace(/:[\w][\w.-]*@sha256:[0-9a-f]{64}/g, ":<version>@sha256:<digest>")
+      // A tag with no digest is not a version — it is a branch an image is built
+      // from, it does not move when the image does, and changing which branch a
+      // service follows is exactly the kind of thing this golden is for. Left
+      // alone.
+      .replace(/@sha256:[0-9a-f]{64}/g, "@sha256:<digest>")
+  );
 }
 
 /**

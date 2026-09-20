@@ -20,10 +20,10 @@ import { type SecretRef } from "./spec";
  * on every host regardless of when each was last updated, and a backup that
  * depends on nothing in `/usr` cannot be broken by an image that changes it.
  *
- * 0.19.1. Resolve with `scripts/pin-image.sh`.
+ * Resolve with `scripts/pin-image.sh`.
  */
 export const RESTIC_IMAGE =
-  "docker.io/restic/restic@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510";
+  "docker.io/restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510";
 
 /**
  * How many snapshots survive `restic forget`, carried over unchanged from the
