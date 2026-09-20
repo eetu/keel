@@ -23,7 +23,7 @@ import { type SecretRef } from "./spec";
  * 0.19.1. Resolve with `scripts/pin-image.sh`.
  */
 export const RESTIC_IMAGE =
-  "docker.io/restic/restic@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510";
+  "docker.io/restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481";
 
 /**
  * How many snapshots survive `restic forget`, carried over unchanged from the
