@@ -8,6 +8,21 @@
   extends: ["config:recommended"],
   automerge: false,
 
+  // Rebase an open PR whenever main moves, rather than only when it conflicts.
+  //
+  // The default is "auto", which for a repo with automerge off means "rebase
+  // when the branch conflicts" — and a PR that merely sits behind is left
+  // alone. That is the wrong reading here, because this repository's PRs are
+  // gated on a CI job whose result depends on the whole tree: the first two
+  // dependency PRs were opened against a main whose golden pinned image
+  // digests, both went red, and both stayed red after the fix landed because
+  // nothing had rebased them. A green tick on a PR tested against a main that
+  // no longer exists is worth less than no tick.
+  //
+  // The cost is a CI run each time main moves under an open PR, which on a
+  // repository with this traffic is nothing.
+  rebaseWhen: "behind-base-branch",
+
   // The bridged NetBird SDK. `sdks/netbird/package.json` is generator output —
   // it pins the TypeScript the postinstall would compile it with, not anything
   // this repository chose — and the way to move it is `pulumi package add`
