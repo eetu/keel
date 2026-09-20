@@ -29,6 +29,27 @@ function fileLine(file: ServiceFile): string {
 }
 
 /**
+ * The image digest, replaced by a marker, because its *value* is not what this
+ * golden is for.
+ *
+ * A digest bump is the one change to a body that is always deliberate and always
+ * visible somewhere better: the catalog diff is a single line naming the new
+ * digest, and everyone already knows a new image restarts the service. Pinning
+ * the sixty-four characters here adds nothing to that and costs a red build on
+ * every Renovate PR — which then has to be made green by regenerating the very
+ * artefact that exists to catch mistakes. A bot updating the golden is the wrong
+ * direction of trust.
+ *
+ * The structure is still asserted, which is the part that can regress by
+ * accident: an `Image=` line that lost its digest, or lost its pin to a tag,
+ * fails this as loudly as before — and `tests/catalog.test.ts` is what holds a
+ * committed entry to a digest rather than a moving tag in the first place.
+ */
+function withoutDigest(body: string): string {
+  return body.replace(/@sha256:[0-9a-f]{64}/g, "@sha256:<digest>");
+}
+
+/**
  * Every body a `pulumi up` writes for each of `entries`, snapshotted.
  *
  * The catalog is passed in rather than derived from the list: a deploy resolves
@@ -65,7 +86,7 @@ export function pinBodies(
       // The catalog, because a deploy renders with it: the derived ordering
       // edges are `After=` lines in the body, and a golden taken without them
       // would pin a unit no deploy writes.
-      expect(renderQuadlet(spec, setup?.env, catalog)).toMatchSnapshot();
+      expect(withoutDigest(renderQuadlet(spec, setup?.env, catalog))).toMatchSnapshot();
     });
 
     it("renders the same route", () => {

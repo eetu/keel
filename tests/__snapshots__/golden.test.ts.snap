@@ -21,7 +21,7 @@ Wants=network-online.target kanidm-cert-sync.service
 
 [Container]
 ContainerName=kanidm
-Image=docker.io/kanidm/server@sha256:7c3d7ed868e91f78c24a7fb9c548876563b375a4203021b730d58369b97ad154
+Image=docker.io/kanidm/server@sha256:<digest>
 Network=keel-internal.network
 PublishPort=127.0.0.1:8443:8443
 Volume=/var/lib/kanidm:/data:Z
@@ -99,7 +99,7 @@ Wants=network-online.target
 
 [Container]
 ContainerName=oauth2-proxy
-Image=quay.io/oauth2-proxy/oauth2-proxy@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
+Image=quay.io/oauth2-proxy/oauth2-proxy@sha256:<digest>
 Network=host
 Volume=/etc/oauth2-proxy:/etc/oauth2-proxy:ro,Z
 Environment=OAUTH2_PROXY_HTTP_ADDRESS=127.0.0.1:4180
@@ -207,7 +207,7 @@ Wants=network-online.target
 
 [Container]
 ContainerName=pihole
-Image=docker.io/pihole/pihole@sha256:a29ad980775f38a8e7524a206ff9c125bc6fcfd9de8de1fc93d2de0671cc1d34
+Image=docker.io/pihole/pihole@sha256:<digest>
 Network=host
 Volume=/var/lib/pihole:/etc/pihole:Z
 Environment=FTLCONF_dns_upstreams=127.0.0.1#5335
@@ -318,7 +318,7 @@ Wants=network-online.target
 
 [Container]
 ContainerName=traefik
-Image=docker.io/library/traefik@sha256:9c2a54d87f76f5c2f5f2682c68394af92fb12c0a2686798d6462a3f84bd78eaf
+Image=docker.io/library/traefik@sha256:<digest>
 Network=host
 Volume=/etc/traefik:/etc/traefik:ro,Z
 Volume=/var/lib/traefik:/var/lib/traefik:Z
@@ -417,7 +417,7 @@ Wants=network-online.target
 
 [Container]
 ContainerName=vaultwarden
-Image=docker.io/vaultwarden/server@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912
+Image=docker.io/vaultwarden/server@sha256:<digest>
 Network=keel-open.network
 PublishPort=127.0.0.1:8085:8085
 Volume=/var/lib/vaultwarden:/data:Z
