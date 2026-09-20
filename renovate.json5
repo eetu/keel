@@ -70,8 +70,14 @@
     {
       customType: "regex",
       managerFilePatterns: ["/^src/config/services\\.ts$/"],
+      // The tag is captured as well as the digest, and that is what makes a
+      // dependency PR readable: with only a digest to go on, Renovate can say
+      // no more than "update docker.io/kanidm/server docker digest to e45f00b",
+      // which tells a human nothing. With `currentValue` it names the versions.
+      // Optional, because an entry built from a branch carries a moving tag and
+      // no digest at all.
       matchStrings: [
-        'image:\\s*\\n?\\s*"(?<depName>[a-z0-9.\\-/]+)@(?<currentDigest>sha256:[0-9a-f]{64})"',
+        'image:\\s*\\n?\\s*"(?<depName>[a-z0-9.\\-/]+)(:(?<currentValue>[\\w][\\w.\\-]*))?@(?<currentDigest>sha256:[0-9a-f]{64})"',
       ],
       datasourceTemplate: "docker",
     },
@@ -81,7 +87,9 @@
     {
       customType: "regex",
       managerFilePatterns: ["/^src/config/backup\\.ts$/"],
-      matchStrings: ['"(?<depName>[a-z0-9.\\-/]+)@(?<currentDigest>sha256:[0-9a-f]{64})"'],
+      matchStrings: [
+        '"(?<depName>[a-z0-9.\\-/]+)(:(?<currentValue>[\\w][\\w.\\-]*))?@(?<currentDigest>sha256:[0-9a-f]{64})"',
+      ],
       datasourceTemplate: "docker",
     },
   ],

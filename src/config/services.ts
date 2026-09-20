@@ -96,9 +96,8 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
   {
     name: "traefik",
     description: "TLS terminator and the only listener facing the LAN",
-    // v3.7.12
     image:
-      "docker.io/library/traefik@sha256:9c2a54d87f76f5c2f5f2682c68394af92fb12c0a2686798d6462a3f84bd78eaf",
+      "docker.io/library/traefik:v3.7.12@sha256:9c2a54d87f76f5c2f5f2682c68394af92fb12c0a2686798d6462a3f84bd78eaf",
     // What it binds on the host. Every other service's port is a loopback
     // upstream behind this one.
     port: 443,
@@ -188,9 +187,8 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
   {
     name: "kanidm",
     description: "Identity provider — the OIDC issuer everything else trusts",
-    // 1.11.1
     image:
-      "docker.io/kanidm/server@sha256:7c3d7ed868e91f78c24a7fb9c548876563b375a4203021b730d58369b97ad154",
+      "docker.io/kanidm/server:1.11.1@sha256:7c3d7ed868e91f78c24a7fb9c548876563b375a4203021b730d58369b97ad154",
     port: KANIDM_PORT,
     // Same shape as Traefik's above: 45 MB of the 47 is the Rust binary's own
     // text, and a 48 MB MemoryHigh sat underneath it — 9,465 throttle events
@@ -255,9 +253,8 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
   {
     name: SESSION_GATE,
     description: "Forward-auth gate in front of every SSO route",
-    // v7.15.4
     image:
-      "quay.io/oauth2-proxy/oauth2-proxy@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded",
+      "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded",
     port: OAUTH2_PROXY_PORT,
     memory: { max: 48, measuredMb: 18, tier: "core" },
     // Traefik calls it as a middleware, but the browser is sent back here after
@@ -374,9 +371,8 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
   {
     name: "vaultwarden",
     description: "Bitwarden-compatible password server",
-    // 1.37.2
     image:
-      "docker.io/vaultwarden/server@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912",
+      "docker.io/vaultwarden/server:1.37.2@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912",
     port: VAULTWARDEN_PORT,
     // A password manager's clients sit on phones and laptops whose resolver is
     // whatever the network handed them; the name has to resolve everywhere,
@@ -428,11 +424,11 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
   {
     name: "pihole",
     description: "Pi-hole: the LAN's resolver",
-    // 2026.07.2. Digest-pinned: podman pulls it at runtime like any other
+    // Digest-pinned: podman pulls it at runtime like any other
     // image, so nothing copies it into storage at install time and a digest
     // reference is free to use. Resolve with `scripts/pin-image.sh`.
     image:
-      "docker.io/pihole/pihole@sha256:a29ad980775f38a8e7524a206ff9c125bc6fcfd9de8de1fc93d2de0671cc1d34",
+      "docker.io/pihole/pihole:2026.07.2@sha256:a29ad980775f38a8e7524a206ff9c125bc6fcfd9de8de1fc93d2de0671cc1d34",
     // The web UI's port. With host networking there is nothing to publish; this
     // is what the service binds and what Traefik will proxy.
     port: 8080,
