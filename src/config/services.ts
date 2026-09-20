@@ -432,7 +432,7 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     // image, so nothing copies it into storage at install time and a digest
     // reference is free to use. Resolve with `scripts/pin-image.sh`.
     image:
-      "docker.io/pihole/pihole@sha256:a29ad980775f38a8e7524a206ff9c125bc6fcfd9de8de1fc93d2de0671cc1d34",
+      "docker.io/pihole/pihole@sha256:0759b8cbc772f7c33c48effb08d6f069d84551a43a011766cfa8c407f09b218e",
     // The web UI's port. With host networking there is nothing to publish; this
     // is what the service binds and what Traefik will proxy.
     port: 8080,
