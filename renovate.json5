@@ -1,23 +1,43 @@
 // Self-hosted config for .github/workflows/renovate.yml. The workflow's own
 // cron is what decides when this runs — Monday, ahead of the image
-// workflow's Wednesday build — so nothing here schedules anything, and
-// automerge stays off: every PR waits on a human, gated by the image
-// workflow's `validate` job the way any other PR is.
+// workflow's Wednesday build — so nothing here schedules anything.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended"],
-  automerge: false,
+
+  // A dependency PR merges itself once the image workflow's `render tests` job
+  // is green, which is the same gate a hand-written PR passes. Nothing here
+  // enforces that gate, and that is the part worth knowing: `platformAutomerge`
+  // is left at its default of true, so what merges the PR is GitHub's own
+  // auto-merge rather than Renovate — and GitHub merges as soon as the PR is
+  // *mergeable*. With no branch protection that is the moment it opens, tests
+  // unstarted. So the green in "automerge when it passes" lives in a ruleset on
+  // `main` requiring that check, not in this file. Removing the ruleset does not
+  // turn automerge off; it turns the testing off and leaves the merging on.
+  //
+  // The ruleset also requires the branch to be up to date. Without that, a
+  // Monday run that opens five PRs has all five green against the same `main`,
+  // merges the first, and merges the other four untested against the tree that
+  // first one made — two bumps that are each fine alone and red together is
+  // exactly the failure the goldens exist to catch. Up-to-date means they land
+  // one at a time, each retested, which is what `rebaseWhen` below pays for.
+  automerge: true,
 
   // Rebase an open PR whenever main moves, rather than only when it conflicts.
   //
-  // The default is "auto", which for a repo with automerge off means "rebase
-  // when the branch conflicts" — and a PR that merely sits behind is left
-  // alone. That is the wrong reading here, because this repository's PRs are
-  // gated on a CI job whose result depends on the whole tree: the first two
-  // dependency PRs were opened against a main whose golden pinned image
-  // digests, both went red, and both stayed red after the fix landed because
-  // nothing had rebased them. A green tick on a PR tested against a main that
-  // no longer exists is worth less than no tick.
+  // The default "auto" leaves a PR that merely sits behind alone. That is the
+  // wrong reading here, because this repository's PRs are gated on a CI job
+  // whose result depends on the whole tree: the first two dependency PRs were
+  // opened against a main whose golden pinned image digests, both went red, and
+  // both stayed red after the fix landed because nothing had rebased them. A
+  // green tick on a PR tested against a main that no longer exists is worth
+  // less than no tick.
+  //
+  // With automerge on it is also what keeps the queue moving. The ruleset wants
+  // an up-to-date branch, so every PR but the first is blocked the moment one
+  // merges, and this is what unblocks them — GitHub's own auto-merge does not
+  // update a branch it is waiting on. The furthest that can fall behind is a
+  // week, since this config is only read when the Monday workflow runs.
   //
   // The cost is a CI run each time main moves under an open PR, which on a
   // repository with this traffic is nothing.
