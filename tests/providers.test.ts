@@ -6,6 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import { SERVICES } from "../src/config/services";
 import { secretsPath } from "../src/config/spec";
+import {
+  type MetricsAccountInputs,
+  metricsAccountProvider,
+} from "../src/infra/providers/metricsAccount";
 import { type PacketFilterInputs, packetFilterProvider } from "../src/infra/providers/packetFilter";
 import { assertWritablePath } from "../src/infra/providers/remoteFile";
 import { assertCiphertext } from "../src/infra/providers/secretFile";
@@ -345,6 +349,74 @@ describe("a unit whose steady state is inactive", () => {
         });
         expect(calls()).toEqual([]);
       });
+    });
+  });
+});
+
+describe("retiring an account on a hub that is going too", () => {
+  /** The state a deleted account is read out of; no value here is read from anywhere. */
+  const account: MetricsAccountInputs & {
+    ciphertext: string;
+    plaintextHash: string;
+    userId: string;
+  } = {
+    ciphertext: "-----BEGIN AGE ENCRYPTED FILE-----",
+    plaintextHash: "0".repeat(64),
+    host: "nowhere",
+    vault: "vault",
+    item: "hub",
+    hubUrl: "http://127.0.0.1:8091",
+    email: "consumer@example.test",
+    role: "readonly",
+    api: {
+      health: "/api/health",
+      superuserAuth: "/api/auth",
+      users: "/api/users",
+      systems: "/api/systems",
+    },
+    superuser: { user: "username", password: "password" },
+    envNames: { user: "HUB_USER", password: "HUB_PASSWORD" },
+    ageRecipient: "age1example",
+    userId: "abc123",
+  };
+
+  /**
+   * `op` and `ssh` ahead of the real ones: the vault read has to succeed before
+   * `speak` ever reaches the board, so both are faked and the remote program's
+   * own diagnostic is what the test varies.
+   */
+  const withRemote = async (stderr: string, body: () => Promise<void>) => {
+    const dir = mkdtempSync(`${tmpdir()}/keel-hub-`);
+    writeFileSync(`${dir}/op`, "#!/bin/sh\necho value\n", { mode: 0o755 });
+    writeFileSync(`${dir}/ssh`, `#!/bin/sh\necho '${stderr}' >&2\nexit 1\n`, { mode: 0o755 });
+    const previous = process.env.PATH;
+    process.env.PATH = `${dir}:${previous}`;
+    try {
+      await body();
+    } finally {
+      process.env.PATH = previous;
+    }
+  };
+
+  it("succeeds when the hub never answers", async () => {
+    // The ordinary way this resource is retired is that the hub goes with it,
+    // and Pulumi deletes in dependency order — the hub's unit first, then this.
+    // Raising there cannot converge: the account's delete waits sixty seconds
+    // for a container the same run stopped, fails, and takes the rest of the
+    // deletions with it, because Pulumi halts at the first error. No later run
+    // can fix it either, since the hub is never coming back. Observed retiring
+    // beszel; it stranded twenty resources and had to be cleared by hand.
+    await withRemote("not answering /api/health after 60s (URLError)", async () => {
+      await expect(metricsAccountProvider.delete!("abc123", account)).resolves.toBeUndefined();
+    });
+  });
+
+  it("still raises when the hub answers and refuses", async () => {
+    // The narrow half. A hub that is reachable and says no is a credential or a
+    // permission problem, and the account is still sitting on it — swallowing
+    // that would retire the resource from state while leaving the login live.
+    await withRemote("403 Forbidden", async () => {
+      await expect(metricsAccountProvider.delete!("abc123", account)).rejects.toThrow(/403/);
     });
   });
 });

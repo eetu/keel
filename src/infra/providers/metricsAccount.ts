@@ -106,6 +106,12 @@ const HEALTH_ATTEMPTS = 30;
 const HEALTH_PAUSE_SECONDS = 2;
 
 /**
+ * What the remote program says when the hub never answered — `serving()` below
+ * composes it, and `delete` is the one caller for which it is not a failure.
+ */
+const NOT_ANSWERING = "not answering";
+
+/**
  * What every remote program starts with: the payload, one request helper, the
  * wait for the hub and the superuser login.
  *
@@ -156,7 +162,7 @@ def serving():
             return
         except Exception as error:
             seen = type(error).__name__
-    fail("not answering %s after %ds (%s)" % (P["api"]["health"], P["attempts"] * P["pause"], seen))
+    fail("${NOT_ANSWERING} %s after %ds (%s)" % (P["api"]["health"], P["attempts"] * P["pause"], seen))
 
 
 def token():
@@ -487,9 +493,34 @@ const provider: pulumi.dynamic.ResourceProvider<MetricsAccountInputs, Outs> = {
   },
 
   async delete(_id, props) {
-    await speak(props, "delete the account", REMOVE, { userId: props.userId });
+    // A hub that does not answer is a hub the account is already gone with, and
+    // that is the ordinary way this resource is retired: removing the consumer's
+    // `metricsAccount` usually means removing the hub too, and Pulumi deletes in
+    // dependency order — the hub's unit first, then this. Observed on the run
+    // that retired beszel: the account's delete waited sixty seconds for a
+    // container the same run had just stopped, failed, and took the rest of the
+    // deletions with it, because Pulumi halts at the first error. The resource
+    // then could not be deleted by any later run either, since the hub was never
+    // coming back. A delete whose precondition is the thing being deleted cannot
+    // converge.
+    //
+    // Narrow on purpose. Only the health wait is forgiven — a hub that answers
+    // and refuses is a real failure and still raises, because that is a
+    // credential or a permission problem and the account is still there.
+    try {
+      await speak(props, "delete the account", REMOVE, { userId: props.userId });
+    } catch (error) {
+      if (!(error as Error).message.includes(NOT_ANSWERING)) throw error;
+    }
   },
 };
+
+/**
+ * The provider itself, so the decision only visible in what `delete` forgives is
+ * an assertion rather than prose. Same object the resource is constructed with;
+ * exporting it changes nothing about how Pulumi serialises it.
+ */
+export const metricsAccountProvider = provider;
 
 export class MetricsAccount extends pulumi.dynamic.Resource {
   declare public readonly ciphertext: pulumi.Output<string>;
