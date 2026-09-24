@@ -656,6 +656,13 @@ describe("one entry is the whole declaration", () => {
     "config/services.local.ts",
     "config/services.local.example.ts",
   ];
+  // A host's `services` list names as many as that board runs, which is the one
+  // selector the repository has — so the installation object is a list of names
+  // by design and the count below cannot apply to it. It is exempt from that
+  // count alone, and not from the scan: `selects nothing by a service's name`
+  // still reads these files, which is the half of the rule that matters. A list
+  // of strings is data; a branch on one of them is the dispatch this forbids.
+  const lists = ["config/installation.ts", "config/installation.example.ts"];
   const sources = readdirSync(root, { recursive: true })
     .map(String)
     .filter((name) => name.endsWith(".ts") && !catalogs.includes(name))
@@ -669,7 +676,7 @@ describe("one entry is the whole declaration", () => {
     // catalog exists not to have. Naming one is a module about that service —
     // the units Kanidm's certificate needs — and that is its subject, not a
     // table it is the second half of.
-    for (const [path, source] of sources) {
+    for (const [path, source] of sources.filter(([path]) => !lists.includes(path))) {
       expect(
         mentions(source).length,
         `${path}: ${mentions(source).join(", ")}`,
