@@ -322,6 +322,30 @@ export function renderQuadlet(
     ...(makesOwnDir ? [`ExecStartPre=/usr/bin/mkdir -p ${ownData}`] : []),
     ...(makesOutputDir ? [`ExecStartPre=/usr/bin/mkdir -p ${outputDir}`] : []),
     `Slice=keel-${spec.memory.tier}.slice`,
+    // Which service the kernel kills when the *machine* runs out of memory, as
+    // opposed to when a cgroup hits its own ceiling.
+    //
+    // Those are different events with different victims and only the second was
+    // ever configured here. `keel-core.slice`'s `MemoryLow` protects the tier
+    // from reclaim and `MemoryMax` bounds each service, but a global OOM ignores
+    // both: the kernel scores every task by size and kills the biggest, and
+    // every container process was arriving at score zero. Measured on this
+    // board — an Actix app allocated, swap was already full, and the kernel
+    // killed `pihole-FTL`, taking the LAN's resolver out because it happened to
+    // hold the most anonymous memory at that instant:
+    //
+    //     actix-rt|system invoked oom-killer ... global_oom
+    //     Out of memory: Killed process 204538 (pihole-FTL)
+    //
+    // pihole's own `memory.events` recorded `oom_kill 0` throughout, which is
+    // the tell: nothing about its cap was involved.
+    //
+    // So the tier states a preference. An app is the right thing to lose — it
+    // is what `keel-apps.slice` already exists to say — and the resolver, the
+    // proxy and the identity provider are the things whose death takes the
+    // house with them. The numbers are only compared against each other, and
+    // they do not override `oom_score_adj` on anything the image runs.
+    `OOMScoreAdjust=${spec.memory.tier === "core" ? -500 : 500}`,
     // A restart policy is a statement that this unit should be running. For a
     // job that runs to completion the opposite is true: exiting is what it is
     // for, and `Restart=always` would turn every finished run into the next one.
