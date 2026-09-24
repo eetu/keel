@@ -1715,6 +1715,16 @@ Before=slices.target
 # before the LAN loses its resolver.
 ManagedOOMMemoryPressure=kill
 ManagedOOMMemoryPressureLimit=60%
+# And on swap exhaustion, which is the case pressure never got to see.
+# Pressure killing needs 60% sustained for thirty seconds; once swap is
+# full an allocation that cannot be satisfied invokes the kernel's own
+# OOM killer immediately, and that one picks by size rather than by
+# tier. Measured with zram at 430.8M of 430.9M: oomctl listed no
+# swap-monitored cgroup at all, oomd never acted, and the kernel took a
+# core-tier service. This is the line that gives oomd a turn first — it kills
+# the worst offender in *this* slice, which is the whole point of the
+# slice, while the kernel's fallback would take the resolver.
+ManagedOOMSwap=kill
 # CPU pressure is resolved here too, and only the apps' side of it moves.
 # Every quadlet is wanted by multi-user.target, so a boot starts two
 # dozen containers at once and the board spends minutes at a load average

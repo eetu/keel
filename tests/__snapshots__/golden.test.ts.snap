@@ -42,6 +42,7 @@ Notify=healthy
 [Service]
 ExecStartPre=/usr/bin/mkdir -p /var/lib/kanidm
 Slice=keel-core.slice
+OOMScoreAdjust=-500
 Restart=always
 RestartSec=10
 RestartSteps=5
@@ -126,6 +127,7 @@ EnvironmentFile=/etc/secrets/oauth2-proxy.env
 
 [Service]
 Slice=keel-core.slice
+OOMScoreAdjust=-500
 Restart=always
 RestartSec=10
 RestartSteps=5
@@ -225,6 +227,7 @@ Notify=healthy
 [Service]
 ExecStartPre=/usr/bin/mkdir -p /var/lib/pihole
 Slice=keel-core.slice
+OOMScoreAdjust=-500
 Restart=always
 RestartSec=10
 RestartSteps=5
@@ -333,6 +336,7 @@ Notify=healthy
 [Service]
 ExecStartPre=/usr/bin/mkdir -p /var/lib/traefik
 Slice=keel-core.slice
+OOMScoreAdjust=-500
 Restart=always
 RestartSec=10
 RestartSteps=5
@@ -431,6 +435,7 @@ EnvironmentFile=/etc/secrets/vaultwarden.env
 [Service]
 ExecStartPre=/usr/bin/mkdir -p /var/lib/vaultwarden
 Slice=keel-apps.slice
+OOMScoreAdjust=500
 Restart=always
 RestartSec=10
 RestartSteps=5

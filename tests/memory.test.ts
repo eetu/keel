@@ -10,8 +10,10 @@ import {
   tierMaxTotalMb,
 } from "../src/config/profiles";
 import { SERVICES } from "../src/config/services";
+import { catalogOf, type ServiceSpec } from "../src/config/spec";
 import { type ServiceMemory } from "../src/config/types";
 import { memoryDropInPath, renderMemory, serviceDropIn } from "../src/render/memory";
+import { renderQuadlet } from "../src/render/quadlet";
 import { CAP_HEADROOM } from "./caps";
 
 /**
@@ -178,5 +180,40 @@ describe("rendered memory tree", () => {
     // table. This test is the only thing stopping the two from drifting.
     const expected = `${PROFILES.map((p) => `${p.name} ${p.minRamMb}`).join("\n")}\n`;
     expect(tree.get("/usr/lib/keel/profiles/index")?.content).toBe(expected);
+  });
+});
+
+describe("who the kernel kills when the machine runs out of memory", () => {
+  /** A fixture per tier, so the rule is asserted on a declaration not a house. */
+  const entry = (tier: "core" | "apps"): ServiceSpec => ({
+    name: `fixture-${tier}`,
+    description: "fixture",
+    image: "x@sha256:0",
+    port: 1,
+    memory: { max: 64, tier },
+    auth: "open",
+  });
+
+  it("prefers an app over the resolver, the proxy and the identity provider", () => {
+    // A *global* OOM is a different event from a cgroup hitting its ceiling, and
+    // only the second was ever configured: MemoryLow protects the core tier from
+    // reclaim and MemoryMax bounds each service, but the kernel's killer ignores
+    // both and scores by size. Every container arrived at zero, so the victim was
+    // whoever happened to be largest — measured here as pihole-FTL, which is the
+    // LAN's resolver, killed by an allocation in an Actix app.
+    const core = renderQuadlet(entry("core"), undefined, catalogOf([]));
+    const apps = renderQuadlet(entry("apps"), undefined, catalogOf([]));
+    expect(core).toContain("OOMScoreAdjust=-500");
+    expect(apps).toContain("OOMScoreAdjust=500");
+  });
+
+  it("gives oomd a turn before the kernel picks", () => {
+    // Pressure killing needs 60% sustained for thirty seconds. Once swap is full
+    // an allocation that cannot be satisfied invokes the kernel's killer at once,
+    // and there is no thirty seconds for pressure to build — so the slice has to
+    // say it wants killing on swap exhaustion too, or oomd never acts at all.
+    const slice = renderMemory().get("/usr/lib/systemd/system/keel-apps.slice")?.content ?? "";
+    expect(slice).toContain("ManagedOOMSwap=kill");
+    expect(slice).toContain("ManagedOOMMemoryPressure=kill");
   });
 });
