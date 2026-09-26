@@ -98,7 +98,7 @@ admin=$(podman run --rm "${tag}" sed -n 's/^admin=//p' /usr/bin/keel-firstboot)
 echo "  admin account: ${admin}"
 
 echo "== building a disk image from ${tag}"
-run_bib "${tag}" "${out}"
+run_bib "localhost/${tag}" "${out}"
 
 disk=$(find "${out}" -name '*.raw' | head -1)
 [ -n "${disk}" ] || { echo "FAIL: no raw disk produced"; exit 1; }
