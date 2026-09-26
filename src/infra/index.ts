@@ -32,6 +32,8 @@ import {
   dependencyNames,
   deployedAccountEmail,
   deploymentGaps,
+  fleetCatalog,
+  hostServices,
   orderServices,
   publicRecords,
   remotesRoutedBy,
@@ -165,8 +167,7 @@ if (unknown.length > 0) {
       `is called — known: ${SERVICES.map((spec) => spec.name).join(", ")}`,
   );
 }
-const mine =
-  listed === undefined ? SERVICES : SERVICES.filter((spec) => listed.includes(spec.name));
+const mine = hostServices(host, SERVICES);
 
 /**
  * Which deployed entry is the proxy, the identity provider and the gate. Resolved
@@ -179,6 +180,9 @@ const mine =
  * one runs on any board. They go to whichever host runs the proxy.
  */
 const catalog = catalogOf(mine, remotesRoutedBy(mine, REMOTES));
+
+/** Every vhost on the LAN, for a setup that writes names rather than routes. */
+const fleet = fleetCatalog(INSTALLATION, SERVICES, REMOTES) ?? catalog;
 
 /**
  * Everything the deployed set names and would not find, raised while the plan is
@@ -341,7 +345,7 @@ const networks = mine.some((spec) => (spec.egress ?? "internal") !== "host")
  * runs after the reload and the reload would re-read the copy still on disk.
  */
 const routesTheMesh = mine.some(
-  (spec) => runSetup(spec, INSTALLATION, catalog)?.mesh?.agent !== undefined,
+  (spec) => runSetup(spec, INSTALLATION, catalog, fleet)?.mesh?.agent !== undefined,
 );
 const forwardRules = renderNftForward(
   mine.some((spec) => (spec.egress ?? "internal") === "open"),
@@ -383,7 +387,7 @@ for (const spec of ordered) {
   // the entry itself from the house and the roles beside it. Nothing here decides
   // what a particular service needs. Pure, so reading it costs nothing and it is
   // read before the secrets, one of which it can ask for.
-  const setup = runSetup(spec, INSTALLATION, catalog);
+  const setup = runSetup(spec, INSTALLATION, catalog, fleet);
 
   // Read, seal, write — all three inside the resource. What reaches the state
   // file is ciphertext and a hash; the identity that opens it lives only on the
@@ -502,7 +506,7 @@ for (const spec of mine) {
   // entry that declares one without the other has nothing to authenticate as,
   // and that is a plan refused here rather than a provider configured with an
   // empty credential and a run that fails resource by resource.
-  const mesh = runSetup(spec, INSTALLATION, catalog)?.mesh;
+  const mesh = runSetup(spec, INSTALLATION, catalog, fleet)?.mesh;
   if (bootstrap === undefined) {
     if (mesh !== undefined) {
       throw new Error(
