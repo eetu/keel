@@ -3,8 +3,8 @@ import { dedent, file, merge, script, type Tree } from "./tree";
 /**
  * Boot diagnostics written where they can be read without booting.
  *
- * The journal is volatile here, which is right for an SD card and useless for
- * debugging a board that will not come up. The ESP is the one filesystem on the
+ * On an SD card the journal lives in RAM, which is right for the card and useless
+ * for debugging a board that will not come up. The ESP is the one filesystem on the
  * card that any machine can mount — it is FAT, so pulling the card and putting it
  * in a laptop is enough, with no Linux tooling and no loop mounts.
  *

@@ -1,7 +1,13 @@
 import { GIT_REPOS_DIR } from "../config/backup";
-import { ADMIN_GROUP, ADMIN_USER, JOURNAL_MAX_USE, MODPROBE_DENY } from "../config/keel";
+import {
+  ADMIN_GROUP,
+  ADMIN_USER,
+  JOURNAL_MAX_USE,
+  JOURNAL_SYSTEM_MAX_USE,
+  MODPROBE_DENY,
+} from "../config/keel";
 import { MASKED_UNITS } from "../config/versions";
-import { dedent, file, merge, symlink, type Tree } from "./tree";
+import { dedent, file, merge, script, symlink, type Tree } from "./tree";
 
 /**
  * Masking, not disabling: a masked unit cannot be started even as another unit's
@@ -92,14 +98,61 @@ function sshd(): Tree {
   );
 }
 
+export const JOURNAL_STORAGE_SCRIPT = "/usr/libexec/keel/journal-storage";
+
+/**
+ * `Storage=auto` persists exactly when /var/log/journal exists, and nothing else
+ * creates it — Fedora's tmpfiles rules only adjust the directory if it is
+ * already there. So `keel-journal-storage` makes it before the flush on a board
+ * whose root is not on an SD card, and an SD board never has one.
+ *
+ * In /usr/libexec rather than /usr/lib/keel: that tree is bin_t, so systemd
+ * runs the script as unconfined_service_t instead of init_t.
+ */
 function journald(): Tree {
-  return file(
-    "/usr/lib/systemd/journald.conf.d/99-keel.conf",
-    dedent(`
-      [Journal]
-      Storage=volatile
-      RuntimeMaxUse=${JOURNAL_MAX_USE}
-    `),
+  return merge(
+    file(
+      "/usr/lib/systemd/journald.conf.d/99-keel.conf",
+      dedent(`
+        [Journal]
+        Storage=auto
+        RuntimeMaxUse=${JOURNAL_MAX_USE}
+        SystemMaxUse=${JOURNAL_SYSTEM_MAX_USE}
+        # What a power cycle loses is what was not yet synced.
+        SyncIntervalSec=1m
+      `),
+    ),
+    script(
+      JOURNAL_STORAGE_SCRIPT,
+      dedent(`
+        #!/bin/sh
+        # A persistent journal unless the boot disk is an SD card.
+        set -eu
+        case "$(findmnt -no SOURCE /sysroot)" in
+            /dev/mmcblk*) exit 0 ;;
+        esac
+        mkdir -p /var/log/journal
+      `),
+    ),
+    file(
+      "/usr/lib/systemd/system/keel-journal-storage.service",
+      dedent(`
+        [Unit]
+        Description=Keep the journal on disk unless the boot disk is an SD card
+        DefaultDependencies=no
+        ConditionPathIsMountPoint=/sysroot
+        After=systemd-remount-fs.service
+        Before=systemd-journal-flush.service
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=${JOURNAL_STORAGE_SCRIPT}
+
+        [Install]
+        WantedBy=sysinit.target
+      `),
+    ),
   );
 }
 

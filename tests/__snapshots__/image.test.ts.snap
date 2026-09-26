@@ -1693,8 +1693,11 @@ ProcessSizeMax=0
 exports[`/usr/lib/systemd/journald.conf.d/99-keel.conf > renders the same bytes 1`] = `
 "mode 644
 [Journal]
-Storage=volatile
+Storage=auto
 RuntimeMaxUse=64M
+SystemMaxUse=256M
+# What a power cycle loses is what was not yet synced.
+SyncIntervalSec=1m
 "
 `;
 
@@ -2017,6 +2020,25 @@ WantedBy=multi-user.target
 "
 `;
 
+exports[`/usr/lib/systemd/system/keel-journal-storage.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Keep the journal on disk unless the boot disk is an SD card
+DefaultDependencies=no
+ConditionPathIsMountPoint=/sysroot
+After=systemd-remount-fs.service
+Before=systemd-journal-flush.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/keel/journal-storage
+
+[Install]
+WantedBy=sysinit.target
+"
+`;
+
 exports[`/usr/lib/systemd/system/keel-mesh.service > renders the same bytes 1`] = `
 "mode 644
 [Unit]
@@ -2206,6 +2228,7 @@ enable systemd-oomd.service
 enable keel-secrets.service
 enable keel-growfs.service
 enable keel-hybrid-mbr.service
+enable keel-journal-storage.service
 enable keel-firstboot.service
 enable chrony-wait.service
 enable unbound.service
@@ -2242,6 +2265,18 @@ d /var/lib/git 0750 keel keel - -
 exports[`/usr/lib/tmpfiles.d/keel-containers.conf > renders the same bytes 1`] = `
 "mode 644
 d /var/lib/containers 0700 root root - -
+"
+`;
+
+exports[`/usr/libexec/keel/journal-storage > renders the same bytes 1`] = `
+"mode 755
+#!/bin/sh
+# A persistent journal unless the boot disk is an SD card.
+set -eu
+case "$(findmnt -no SOURCE /sysroot)" in
+    /dev/mmcblk*) exit 0 ;;
+esac
+mkdir -p /var/log/journal
 "
 `;
 

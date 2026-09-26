@@ -94,8 +94,12 @@ export const FALLBACK_DNS: readonly string[] = ["9.9.9.9", "149.112.112.112"];
 export const MODPROBE_DENY: readonly string[] = ["algif_aead", "algif_skcipher"];
 
 /**
- * Journal is volatile: logs live in RAM and are lost on reboot. On these boards
- * that is the point — persistent journals are the single largest source of
- * avoidable writes to the boot media.
+ * The journal lives in RAM on a board that boots from an SD card and on disk on
+ * any other. A persistent journal is the largest source of avoidable writes to
+ * an SD card; on an SSD those writes cost nothing, and a board that wedges and
+ * has to be power cycled otherwise loses every line from before the wedge.
  */
 export const JOURNAL_MAX_USE = "64M";
+
+/** The on-disk cap, on a board whose boot disk is not an SD card. */
+export const JOURNAL_SYSTEM_MAX_USE = "256M";
