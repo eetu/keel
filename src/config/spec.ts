@@ -908,6 +908,25 @@ export function roles(specs: readonly ServiceSpec[]): Roles {
   };
 }
 
+/**
+ * The remotes a host routes: all of them on the host that runs the proxy, none
+ * anywhere else.
+ *
+ * A remote is a route file in the proxy's watched directory, a LAN record in the
+ * resolver's hosts file and, with `publicDns`, a Cloudflare record — so a board
+ * without the proxy has no directory to write into, and a second stack that
+ * declared the same public record would fight the first one over it. The rule
+ * also keeps names apart when a service moves between boards: it deploys where
+ * it runs, and the proxy's host reaches it through a remote of the same name,
+ * so neither stack ever holds both.
+ */
+export function remotesRoutedBy(
+  specs: readonly ServiceSpec[],
+  remotes: readonly RemoteSpec[],
+): readonly RemoteSpec[] {
+  return roles(specs).proxy === undefined ? [] : remotes;
+}
+
 /** Those roles beside the set they came from, which is what a setup is handed. */
 export function catalogOf(
   specs: readonly ServiceSpec[],

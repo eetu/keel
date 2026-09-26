@@ -23,6 +23,7 @@ import {
   metricsSecretsPath,
   publicRecords,
   type RemoteSpec,
+  remotesRoutedBy,
   runSetup,
   secretFields,
   secretFileShape,
@@ -880,5 +881,28 @@ describe("the proxy's port and the public vhost", () => {
 
   it("names a subdomain nothing deploys as no reason to open anything", () => {
     expect(publicProxyIngress(catalogOf(EXAMPLE_SERVICES), ["nothing-deploys-this"])).toBeNull();
+  });
+});
+
+describe("which host routes the remotes", () => {
+  const remote: RemoteSpec = {
+    name: "elsewhere",
+    description: "a vhost whose upstream is another machine",
+    subdomain: "elsewhere",
+    upstream: "http://192.0.2.10:8080",
+    auth: "edge",
+  };
+  const proxy = catalogOf(EXAMPLE_SERVICES).proxy!.spec;
+
+  it("is the host that runs the proxy", () => {
+    expect(remotesRoutedBy(EXAMPLE_SERVICES, [remote])).toEqual([remote]);
+  });
+
+  it("is never a host without one", () => {
+    // Such a board has no watched directory for the route file, and a second
+    // stack declaring the remote would declare its public record twice.
+    const board = EXAMPLE_SERVICES.filter((spec) => spec !== proxy);
+    expect(remotesRoutedBy(board, [remote])).toEqual([]);
+    expect(remotesRoutedBy([], [remote])).toEqual([]);
   });
 });
