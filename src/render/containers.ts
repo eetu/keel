@@ -27,9 +27,6 @@ function pruneScript(): Tree {
       # names.
       set -euo pipefail
 
-      keep=$(mktemp)
-      trap 'rm -f "$keep"' EXIT
-
       resolve() {
           while read -r ref; do
               [ -n "$ref" ] || continue
@@ -37,9 +34,21 @@ function pruneScript(): Tree {
           done
       }
 
-      podman ps --all --format '{{.Image}}' | resolve >>"$keep"
-      awk -F= '/^Image=/ { print $2 }' /etc/containers/systemd/*.container 2>/dev/null |
-          resolve >>"$keep"
+      # A board with no quadlets matches no glob, and awk handed the literal
+      # pattern exits 2 — which pipefail makes the run's failure.
+      shopt -s nullglob
+      quadlets=(/etc/containers/systemd/*.container)
+
+      # Held in a variable, not a mktemp file. systemd execs this lib_t script
+      # with no domain transition, so bash runs as init_t while mktemp, a bin_t
+      # binary, transitions and labels its file tmp_t — which init_t may not
+      # append to.
+      keep=$(
+          podman ps --all --format '{{.Image}}' | resolve
+          if [ \${#quadlets[@]} -gt 0 ]; then
+              awk -F= '/^Image=/ { print $2 }' "\${quadlets[@]}" | resolve
+          fi
+      )
 
       # Removal is by name, and by id only for an image that has none. Never
       # \`rmi --force\`: that deletes the containers using an image too, so a
@@ -49,7 +58,7 @@ function pruneScript(): Tree {
               # \`podman images\` prints an algorithm prefix and \`image inspect\`
               # does not, so an unnormalised comparison matches nothing — and a
               # keep set that matches nothing removes the whole store.
-              grep -qxF "\${id#sha256:}" "$keep" && continue
+              case $'\\n'"$keep"$'\\n' in *$'\\n'"\${id#sha256:}"$'\\n'*) continue ;; esac
               case "$ref" in
               *:'<none>' | '<none>:<none>') podman rmi "$id" || true ;;
               *) podman rmi "$ref" || true ;;
