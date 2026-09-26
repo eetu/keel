@@ -45,18 +45,20 @@ file_size_bytes() {
     esac
 }
 
-# run_bib <image-tag> <outdir>
+# run_bib <image-ref> <outdir>
 # The bootc-image-builder invocation that turns a container image into a raw
-# disk, against this repo's blueprint.
+# disk, against this repo's blueprint. The reference is also what the installed
+# system tracks for updates: bib records the name it built from as the target,
+# and has no flag to say otherwise.
 run_bib() {
-    local tag="$1" outdir="$2"
+    local ref="$1" outdir="$2"
     podman run --rm --privileged \
         --security-opt label=type:unconfined_t \
         --volume "${outdir}:/output" \
         --volume /var/lib/containers/storage:/var/lib/containers/storage \
         --volume "${_keel_lib_dir}/config.toml:/config.toml:ro" \
         quay.io/centos-bootc/bootc-image-builder:latest \
-        --type raw --rootfs ext4 --local "localhost/${tag}"
+        --type raw --rootfs ext4 --local "${ref}"
 }
 
 # boot_disk_under_qemu <disk> <vars-fd> <console-log> [qemu args...]

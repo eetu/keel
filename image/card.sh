@@ -46,8 +46,25 @@ sed 's/^/  /' "${out}/keel.conf"
 # A previous run's disk would otherwise be found by the firmware step below.
 rm -rf "${out}/image"
 
-echo "== building the disk image"
-run_bib "${tag}" "${out}"
+# The card tracks the registry CI publishes to, not the local tag it was built
+# from: a board tracking localhost/keel has nowhere to fetch an update, and
+# every weekly window fails against it. Derived from the origin remote the way
+# CI derives it from the repository owner, so a fork's card follows the fork.
+image_ref="${KEEL_IMAGE_REF:-}"
+if [ -z "${image_ref}" ]; then
+    origin=$(git -C "${repo}" remote get-url origin 2>/dev/null || true)
+    owner=$(printf '%s\n' "${origin}" | sed -nE 's#.*github\.com[:/]([^/]+)/.*#\1#p' |
+        tr '[:upper:]' '[:lower:]')
+    [ -n "${owner}" ] || {
+        echo "FAIL: cannot derive a registry from origin '${origin}' — set KEEL_IMAGE_REF"
+        exit 1
+    }
+    image_ref="ghcr.io/${owner}/keel:latest"
+fi
+podman tag "localhost/${tag}" "${image_ref}"
+
+echo "== building the disk image (tracking ${image_ref})"
+run_bib "${image_ref}" "${out}"
 
 disk=$(find "${out}" -name '*.raw' | head -1)
 [ -n "${disk}" ] || { echo "FAIL: no raw disk produced"; exit 1; }
