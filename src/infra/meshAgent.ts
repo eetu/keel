@@ -17,7 +17,12 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { SECRETS_DIR } from "../config/spec";
-import { KEEL_MESH_SERVICE, MESH_AGENT_BINARY, MESH_STATE_DIR } from "../render/mesh";
+import {
+  KEEL_MESH_SERVICE,
+  MESH_AGENT_BINARY,
+  MESH_SETUP_KEY_SUFFIX,
+  MESH_STATE_DIR,
+} from "../render/mesh";
 import { MeshEnrolment } from "./providers/meshEnrolment";
 import { RemoteBinary } from "./providers/remoteBinary";
 import { SealedText } from "./providers/sealedText";
@@ -56,7 +61,7 @@ export default class MeshAgent extends pulumi.ComponentResource {
     // the whole of what `keel-secrets.service` opens: `<path>.age` in, `<path>`
     // out, mode 600, root. A blob anywhere else is written correctly, never
     // decrypted, and discovered as a client that cannot read its own key.
-    const keyPath = `${SECRETS_DIR}/${name}.setup-key`;
+    const keyPath = `${SECRETS_DIR}/${name}${MESH_SETUP_KEY_SUFFIX}`;
     const sealed = new SealedText(
       `${name}-setup-key`,
       // Stated rather than inherited: the provider marks the key secret, and a

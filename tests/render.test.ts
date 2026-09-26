@@ -16,12 +16,15 @@ import { describe, expect, it } from "vitest";
 import { ADMIN_GROUP, ADMIN_USER, NETWORKS, UNBOUND } from "../src/config/keel";
 import { PROFILES, resolveMemory } from "../src/config/profiles";
 import { SERVICES } from "../src/config/services";
+import { SECRETS_DIR } from "../src/config/spec";
 import { MASKED_UNITS, REQUIRED_UNITS } from "../src/config/versions";
 import { renderAll } from "../src/render";
 import {
   KEEL_MESH_SERVICE,
   MESH_AGENT_BINARY,
   MESH_INTERFACE,
+  MESH_SETUP_KEY_GLOB,
+  MESH_SETUP_KEY_SUFFIX,
   MESH_STATE_DIR,
 } from "../src/render/mesh";
 import { renderNftForward } from "../src/render/nftForward";
@@ -327,6 +330,15 @@ describe("the mesh agent the image carries", () => {
       expect(MESH_STATE_DIR, spec.name).not.toBe(`/var/lib/${spec.name}`);
     }
     expect(unit).toContain(`Environment=NB_STATE_DIR=${MESH_STATE_DIR}`);
+  });
+
+  it("runs only where the deploy sealed a setup key", () => {
+    // The glob and the path MeshAgent writes are spelled in two places, because
+    // a renderer cannot import SECRETS_DIR. If they drifted, an enrolling board
+    // would skip its own daemon at every boot and its enrolment would find
+    // nothing listening, with a clean condition check as the only trace.
+    expect(MESH_SETUP_KEY_GLOB).toBe(`${SECRETS_DIR}/*${MESH_SETUP_KEY_SUFFIX}.age`);
+    expect(unit).toContain(`ConditionPathExistsGlob=${MESH_SETUP_KEY_GLOB}`);
   });
 
   it("carries a unit name no quadlet can claim", () => {

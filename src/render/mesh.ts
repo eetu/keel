@@ -45,6 +45,16 @@ export const MESH_INTERFACE = "wt0";
 /** The daemon's unit. */
 export const KEEL_MESH_SERVICE = "keel-mesh.service";
 
+/** What names a sealed setup key, after `<SECRETS_DIR>/<entry>`. */
+export const MESH_SETUP_KEY_SUFFIX = ".setup-key";
+
+/**
+ * The sealed setup key of any entry, which is what decides whether the daemon
+ * runs. A board whose deploy enrols it has one; a board that never joins the
+ * mesh has none and spends nothing on an agent waiting for a login.
+ */
+export const MESH_SETUP_KEY_GLOB = `/etc/secrets/*${MESH_SETUP_KEY_SUFFIX}.age`;
+
 /**
  * Named for what it does here rather than for the product, because
  * `netbird.service` is taken: the coordinator is a catalog entry of that name,
@@ -67,6 +77,10 @@ function agentUnit(): Tree {
       # before it starts rather than racing both.
       Wants=network-online.target
       After=network-online.target nftables.service
+      # Only on a board whose deploy enrols it. Idle and unenrolled the daemon
+      # still holds ~45 MB, the largest process on a board running nothing. The
+      # deploy seals the key before it starts this unit, so enrolment is unchanged.
+      ConditionPathExistsGlob=${MESH_SETUP_KEY_GLOB}
 
       [Service]
       Type=simple

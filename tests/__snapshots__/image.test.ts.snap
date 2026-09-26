@@ -2049,6 +2049,10 @@ Documentation=https://docs.netbird.io/how-to/getting-started
 # before it starts rather than racing both.
 Wants=network-online.target
 After=network-online.target nftables.service
+# Only on a board whose deploy enrols it. Idle and unenrolled the daemon
+# still holds ~45 MB, the largest process on a board running nothing. The
+# deploy seals the key before it starts this unit, so enrolment is unchanged.
+ConditionPathExistsGlob=/etc/secrets/*.setup-key.age
 
 [Service]
 Type=simple
