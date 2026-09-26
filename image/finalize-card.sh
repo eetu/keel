@@ -49,6 +49,7 @@ fi
 
 echo "== lifting the Pi boot chain out of ${tag}"
 podman run --rm "${tag}" tar -C /usr/lib/keel/rpi -cf - . > "${work}/rpi.tar"
+podman run --rm "${tag}" cat /usr/lib/keel/hybrid-mbr > "${work}/hybrid-mbr"
 tar -tf "${work}/rpi.tar" | sed 's/^/  /'
 
 # Each [pi*] section scopes the kernel line to the model it is for — same
@@ -115,15 +116,36 @@ echo "  root is $rnode at sector $rstart, $rsize sectors"
 rloop=$(losetup --find --show --offset $((rstart * 512)) --sizelimit $((rsize * 512)) "$disk")
 trap 'losetup -d "$rloop" 2>/dev/null || true' EXIT
 
-# `-p` first (fixes what it safely can); `-y` only if that was not enough. A
-# `-y` that still cannot repair the filesystem is unrecoverable corruption,
-# not a transient error, so it aborts here rather than resizing and shipping
-# a card built on a filesystem e2fsck gave up on.
-if ! e2fsck -f -p "$rloop" >/dev/null 2>&1; then
-    if ! e2fsck -f -y "$rloop" >/dev/null 2>&1; then
-        echo "FAIL: e2fsck could not repair the root filesystem"
-        exit 1
-    fi
+# `-p` only, and never `-y`. resize2fs refuses a filesystem that has not been
+# checked, so the check has to happen; what must not happen is an interactive
+# repair answered yes.
+#
+# e2fsck's status is a bitmask: 0 clean, 1 errors corrected, 2 corrected and a
+# reboot advised. Preen fixes only what is safe without asking — a journal left
+# to replay is the ordinary case — so 0, 1 and 2 all mean the filesystem is good
+# and the card goes on. 4 and up is preen saying it needs a human.
+#
+# It used to call `-y` at that point, and on an ostree root that is destructive
+# rather than thorough: `-y` answers yes to every prompt, and the prompt it
+# reaches for is unlinking what it cannot attach. One run moved the entire
+# deployment — 266 entries, 2.2 GB — into lost+found as bare inode numbers,
+# leaving a root with /ostree/boot.1 and no /ostree/deploy at all. The card then
+# shrank, rewrote its ESP, and passed every structural check there is: partition
+# table sound, root UUID matching grub.cfg, filesystem clean. It booted GRUB,
+# loaded the kernel, and dropped into dracut's emergency shell, because there
+# was no deployment left to switch into.
+#
+# So a card that needs more than preen is not a card, and the repair is the
+# thing to refuse. e2fsck's own output is printed rather than swallowed: the
+# disk that produced the failure is the one the next run overwrites, so a
+# message discarded here cannot be recovered afterwards.
+fsck_status=0
+e2fsck -f -p "$rloop" >/tmp/e2fsck.log 2>&1 || fsck_status=$?
+if [ "$fsck_status" -gt 2 ]; then
+    echo "FAIL: e2fsck wants a repair this script will not make (status ${fsck_status})"
+    echo "      An ostree root repaired with -y loses its deployment to lost+found."
+    sed 's/^/    /' /tmp/e2fsck.log
+    exit 1
 fi
 resize2fs -M "$rloop" >/dev/null 2>&1
 
@@ -223,6 +245,16 @@ pi4="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"
 for required in $shared $pi3 $pi4; do
     [ -f "/mnt/esp/$required" ] || { echo "FAIL: $required missing from the ESP"; exit 1; }
 done
+# The Pi 3 trees carry the firmware's default names but the kernel's mainline
+# content (the Containerfile says why). A vendor tree under that name boots all
+# the way to a login prompt and brings up no ethernet: its USB node is
+# brcm,bcm2708-usb, which only the Raspberry Pi kernel's dwc_otg binds, so
+# mainline dwc2 never probes and the LAN7515 behind it never appears. Nothing
+# about that failure is visible from outside the board, so it is refused here.
+for dtb in bcm2710-rpi-3-b.dtb bcm2710-rpi-3-b-plus.dtb; do
+    grep -aq "brcm,bcm2835-usb" "/mnt/esp/$dtb" ||
+        { echo "FAIL: $dtb is not the mainline tree — dwc2 would not bind, and a Pi 3 would have no ethernet"; exit 1; }
+done
 for best_effort in bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb; do
     [ -f "/mnt/esp/$best_effort" ] || echo "WARN: $best_effort missing from the ESP (Pi 5 boot is best-effort)"
 done
@@ -236,6 +268,15 @@ ls /mnt/esp | sed 's/^/    /'
 umount /mnt/esp
 losetup -d "$eloop"
 trap - EXIT
+
+# --- hybrid MBR, so a Pi 3 can find the ESP -------------------------------
+# A Pi 3's boot ROM reads the MBR and nothing else, so the card names the ESP
+# there as FAT32. The script is the image's own — src/render/base.ts renders it
+# and says why — because the board runs it again after every growpart, and one
+# writer of these bytes is what keeps the card build and the board agreeing.
+bash /w/hybrid-mbr "$disk"
+label=$(sfdisk --json "$disk" 2>/dev/null | jq -r ".partitiontable.label")
+[ "$label" = "gpt" ] || { echo "FAIL: table reads as '$label' behind the hybrid MBR"; exit 1; }
 INNER
 
 before=$(file_size_bytes "${disk}")

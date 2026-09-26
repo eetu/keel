@@ -36,6 +36,7 @@ const UNITS = [
   "systemd-oomd.service",
   "keel-secrets.service",
   "keel-growfs.service",
+  "keel-hybrid-mbr.service",
   "keel-firstboot.service",
   // chrony's own wait: holds `time-sync.target` until the clock is synchronised,
   // giving up after 180 s so a board with no NTP still finishes booting. The

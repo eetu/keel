@@ -331,6 +331,104 @@ function growfs(): Tree {
   );
 }
 
+export const HYBRID_MBR_SCRIPT = "/usr/lib/keel/hybrid-mbr";
+
+/**
+ * The MBR entry a Raspberry Pi 3 boots from, written by the card build and put
+ * back by the board after every rewrite of its partition table.
+ *
+ * A Pi 3's boot ROM reads the MBR and nothing else — GPT arrived with the Pi
+ * 4's EEPROM bootloader, and a 3 has no EEPROM to update. Behind a protective
+ * MBR alone it finds no FAT partition, never loads bootcode.bin, and sits
+ * powered with nothing on the serial line or the network. So the card carries a
+ * hybrid MBR: entry 1 names the ESP as FAT32 (0x0c) for the ROM, entry 2 is the
+ * protective 0xee that makes Linux, U-Boot and edk2 read the GPT behind it, and
+ * all three accept that only when it starts at LBA 1.
+ *
+ * growpart undoes it. The first boot's resize writes back a plain protective
+ * MBR, which gives a card a Pi 3 boots exactly once. So the same script runs
+ * after `keel-growfs` on every boot, and does nothing unless the table reads
+ * as a bare protective MBR again. The card build runs this file out of the
+ * image rather than a copy of its own, so there is one writer of these bytes.
+ *
+ * Skipped on a Pi 4 or 5, whose bootloader reads GPT: a board that boots
+ * today gains nothing from its MBR changing under it. Not gated *to* a Pi 3,
+ * because qemu is where the card build proves this survives growpart.
+ */
+function hybridMbr(): Tree {
+  return merge(
+    file(
+      HYBRID_MBR_SCRIPT,
+      dedent(`
+        #!/bin/bash
+        # hybrid-mbr [disk] — the disk /sysroot is on, unless one is named.
+        set -euo pipefail
+        if [ $# -gt 0 ]; then
+            disk=$1
+        else
+            part=$(basename "$(readlink -f "$(findmnt -nvo SOURCE /sysroot)")")
+            disk=/dev/$(basename "$(dirname "$(readlink -f "/sys/class/block/$part")")")
+        fi
+
+        entries() {
+            dd if="$disk" bs=1 skip=446 count=64 status=none | od -An -tx1 -v |
+                tr -s ' \\n' ' ' | awk '{ print $5, $21 }'
+        }
+        case "$(entries)" in
+            "0c ee") exit 0 ;;
+            "ee 00") ;;
+            *) echo "hybrid-mbr: $disk has MBR entries '$(entries)', not a protective MBR; left alone"
+               exit 0 ;;
+        esac
+
+        read -r start size < <(sfdisk -d "$disk" | awk '
+            toupper($0) ~ /TYPE=C12A7328-F81F-11D2-BA4B-00A0C93EC93B/ {
+                match($0, /start= *[0-9]+/); s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s)
+                match($0, /size= *[0-9]+/); z = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", z)
+                print s, z; exit
+            }')
+        [ -n "$start" ] || { echo "hybrid-mbr: no EFI System partition on $disk"; exit 1; }
+
+        # Little-endian, as hex for basenc: no escapes for anything to eat.
+        le32() { printf '%02X%02X%02X%02X' $(($1 & 255)) $(($1 >> 8 & 255)) $(($1 >> 16 & 255)) $(($1 >> 24 & 255)); }
+        # CHS carries the LBA-only marker; nothing on this path reads it.
+        hex="00FEFFFF0CFEFFFF$(le32 "$start")$(le32 "$size")"
+        hex="$hex""00FEFFFFEEFEFFFF$(le32 1)$(le32 $((start - 1)))"
+        hex="$hex$(printf '0%.0s' $(seq 64))"
+        printf '%s' "$hex" | basenc --base16 -d | dd of="$disk" bs=1 seek=446 conv=notrunc status=none
+        sync
+
+        [ "$(entries)" = "0c ee" ] || { echo "hybrid-mbr: $disk reads '$(entries)' after the write"; exit 1; }
+        echo "hybrid-mbr: $disk carries the ESP as FAT32 for a Pi 3's boot ROM"
+      `),
+      0o755,
+    ),
+    file(
+      "/usr/lib/systemd/system/keel-hybrid-mbr.service",
+      dedent(`
+        [Unit]
+        Description=Keep the MBR entry a Raspberry Pi 3's boot ROM reads
+        ConditionFirmware=!device-tree-compatible(brcm,bcm2711)
+        ConditionFirmware=!device-tree-compatible(brcm,bcm2712)
+        ConditionPathIsMountPoint=/sysroot
+        DefaultDependencies=no
+        Requires=sysinit.target
+        # After the resize, which is what rewrites the table.
+        After=sysinit.target keel-growfs.service
+        Before=basic.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=${HYBRID_MBR_SCRIPT}
+
+        [Install]
+        WantedBy=multi-user.target
+      `),
+    ),
+  );
+}
+
 /**
  * Units enabled at image build. A preset file is the image-native way to say
  * "enabled by default" — the Containerfile runs `systemctl preset-all`, which
@@ -354,6 +452,7 @@ export function renderBase(): Tree {
     kargs(),
     chronyOptions(),
     growfs(),
+    hybridMbr(),
     sudoers(),
   );
 }

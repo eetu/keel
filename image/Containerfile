@@ -111,6 +111,14 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 # build lifts them out of the built image. That also keeps them out of
 # bootupd's way — it manages /boot/efi/EFI only, and has no support for Pi
 # firmware at the ESP root (coreos/bootupd#651).
+#
+# The Pi 3 trees are the exception: the kernel's own, under the firmware's
+# default names, so config.txt still needs no device_tree= line. The ones
+# bcm283x-firmware ships are the Raspberry Pi kernel's, whose USB node is
+# brcm,bcm2708-usb for their out-of-tree dwc_otg driver — mainline dwc2 matches
+# brcm,bcm2835-usb and never binds, and a 3's ethernet is a LAN7515 on that USB
+# bus. A 3 B+ on the vendor tree boots to a login prompt with no NIC at all. A
+# Pi 4 is unaffected because its NIC is on the SoC, so its tree is left alone.
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         bcm2711-firmware \
         bcm2712-firmware \
@@ -120,7 +128,9 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
     && mkdir -p /usr/lib/keel/rpi \
     && cp /boot/efi/bootcode.bin /usr/lib/keel/rpi/ \
     && cp /boot/efi/start.elf /boot/efi/fixup.dat /usr/lib/keel/rpi/ \
-    && cp /boot/efi/bcm2710-rpi-3-b.dtb /boot/efi/bcm2710-rpi-3-b-plus.dtb /usr/lib/keel/rpi/ \
+    && kver=$(ls /usr/lib/modules | head -1) \
+    && cp /usr/lib/modules/${kver}/dtb/broadcom/bcm2837-rpi-3-b.dtb /usr/lib/keel/rpi/bcm2710-rpi-3-b.dtb \
+    && cp /usr/lib/modules/${kver}/dtb/broadcom/bcm2837-rpi-3-b-plus.dtb /usr/lib/keel/rpi/bcm2710-rpi-3-b-plus.dtb \
     && cp /boot/efi/start4.elf /boot/efi/fixup4.dat /usr/lib/keel/rpi/ \
     && cp /boot/efi/bcm2711-rpi-4-b.dtb /usr/lib/keel/rpi/ \
     && cp /boot/efi/bcm2712-rpi-5-b.dtb /boot/efi/bcm2712d0-rpi-5-b.dtb /usr/lib/keel/rpi/ \
