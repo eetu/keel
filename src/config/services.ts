@@ -469,13 +469,15 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     backup: true,
     // It is the resolver: every deployed vhost's LAN record is a line this
     // writes, into the directory dnsmasq's `hostsdir` watches.
-    setup: ({ installation: { network }, catalog }) => {
+    setup: ({ installation: { network }, fleet }) => {
       // One line per deployed vhost — a service's or a remote's, both pointing
-      // at the proxy. `publicHosts` needs nothing of its own here — every name
+      // at the proxy. Read from the proxy host's catalog rather than this
+      // board's, so a second resolver on another board answers for the same
+      // names as the first. `publicHosts` needs nothing of its own here — every name
       // in it already names a subdomain one of these entries claims, and only
       // says that name should skip Traefik's allowlist, not that it resolves
       // to something else.
-      const lines = vhosts(catalog).map(
+      const lines = vhosts(fleet).map(
         (entry) => `${network.lanAddress} ${entry.subdomain}.${network.domain}`,
       );
       return {
