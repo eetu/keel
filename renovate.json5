@@ -15,12 +15,16 @@
   // `main` requiring that check, not in this file. Removing the ruleset does not
   // turn automerge off; it turns the testing off and leaves the merging on.
   //
-  // The ruleset also requires the branch to be up to date. Without that, a
-  // Monday run that opens five PRs has all five green against the same `main`,
-  // merges the first, and merges the other four untested against the tree that
-  // first one made — two bumps that are each fine alone and red together is
-  // exactly the failure the goldens exist to catch. Up-to-date means they land
-  // one at a time, each retested, which is what `rebaseWhen` below pays for.
+  // What the ruleset deliberately does *not* require is that the branch be up to
+  // date. It did briefly, and the cost was the whole point of automerging: a
+  // Monday run opens several PRs at once, the first to merge puts every other
+  // one behind `main`, and each then waits for a human to press update — which
+  // is the hand-holding this exists to remove. So they merge in parallel, all
+  // tested against the `main` they were opened from, and a pair that is green
+  // apart and red together lands. What catches that is the image workflow's own
+  // `push: [main]` run: the combination is tested the moment it exists, days
+  // before Wednesday's build and a week before the fleet's Saturday window.
+  // Red `main` and a revert, rather than a blocked queue.
   automerge: true,
 
   // Rebase an open PR whenever main moves, rather than only when it conflicts.
@@ -33,11 +37,10 @@
   // green tick on a PR tested against a main that no longer exists is worth
   // less than no tick.
   //
-  // With automerge on it is also what keeps the queue moving. The ruleset wants
-  // an up-to-date branch, so every PR but the first is blocked the moment one
-  // merges, and this is what unblocks them — GitHub's own auto-merge does not
-  // update a branch it is waiting on. The furthest that can fall behind is a
-  // week, since this config is only read when the Monday workflow runs.
+  // With automerge on it is also the only thing that retests a stale PR, since
+  // nothing blocks one for being behind any more — and it can only do that when
+  // the workflow runs, so a PR that survives a Monday is retested the following
+  // Monday and merged untested in between.
   //
   // The cost is a CI run each time main moves under an open PR, which on a
   // repository with this traffic is nothing.
