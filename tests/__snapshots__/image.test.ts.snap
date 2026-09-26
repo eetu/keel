@@ -209,9 +209,16 @@ ranges=/etc/keel/nft.d/10-ranges.nft
 # couple of seconds into the boot, so a board watched over a 3.3 V adapter
 # on GPIO 14/15 — or a QEMU run watching -serial — would otherwise never
 # see a word of this.
+#
+# At <3>, because the image boots with quiet: that sets the console loglevel
+# to 4 and prints only levels 0–3, and a /dev/kmsg line with no prefix is
+# level 4 — so without it every word here reached dmesg and none reached
+# the console this exists for. The cost is that the journal files this copy
+# as an error, which puts firstboot's decisions in the flight recorder's
+# warnings-and-above, the one place a failed card's reader looks first.
 say() {
     printf 'keel-firstboot: %s\\n' "$1"
-    if [ -w /dev/kmsg ]; then printf 'keel-firstboot: %s\\n' "$1" > /dev/kmsg; fi
+    if [ -w /dev/kmsg ]; then printf '<3>keel-firstboot: %s\\n' "$1" > /dev/kmsg; fi
     return 0
 }
 
@@ -990,6 +997,51 @@ for blob in /etc/secrets/*.age; do
     fi
     mv "$tmp" "$out"
 done
+"
+`;
+
+exports[`/usr/lib/keel/hybrid-mbr > renders the same bytes 1`] = `
+"mode 755
+#!/bin/bash
+# hybrid-mbr [disk] — the disk /sysroot is on, unless one is named.
+set -euo pipefail
+if [ $# -gt 0 ]; then
+    disk=$1
+else
+    part=$(basename "$(readlink -f "$(findmnt -nvo SOURCE /sysroot)")")
+    disk=/dev/$(basename "$(dirname "$(readlink -f "/sys/class/block/$part")")")
+fi
+
+entries() {
+    dd if="$disk" bs=1 skip=446 count=64 status=none | od -An -tx1 -v |
+        tr -s ' \\n' ' ' | awk '{ print $5, $21 }'
+}
+case "$(entries)" in
+    "0c ee") exit 0 ;;
+    "ee 00") ;;
+    *) echo "hybrid-mbr: $disk has MBR entries '$(entries)', not a protective MBR; left alone"
+       exit 0 ;;
+esac
+
+read -r start size < <(sfdisk -d "$disk" | awk '
+    toupper($0) ~ /TYPE=C12A7328-F81F-11D2-BA4B-00A0C93EC93B/ {
+        match($0, /start= *[0-9]+/); s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s)
+        match($0, /size= *[0-9]+/); z = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", z)
+        print s, z; exit
+    }')
+[ -n "$start" ] || { echo "hybrid-mbr: no EFI System partition on $disk"; exit 1; }
+
+# Little-endian, as hex for basenc: no escapes for anything to eat.
+le32() { printf '%02X%02X%02X%02X' $(($1 & 255)) $(($1 >> 8 & 255)) $(($1 >> 16 & 255)) $(($1 >> 24 & 255)); }
+# CHS carries the LBA-only marker; nothing on this path reads it.
+hex="00FEFFFF0CFEFFFF$(le32 "$start")$(le32 "$size")"
+hex="$hex""00FEFFFFEEFEFFFF$(le32 1)$(le32 $((start - 1)))"
+hex="$hex$(printf '0%.0s' $(seq 64))"
+printf '%s' "$hex" | basenc --base16 -d | dd of="$disk" bs=1 seek=446 conv=notrunc status=none
+sync
+
+[ "$(entries)" = "0c ee" ] || { echo "hybrid-mbr: $disk reads '$(entries)' after the write"; exit 1; }
+echo "hybrid-mbr: $disk carries the ESP as FAT32 for a Pi 3's boot ROM"
 "
 `;
 
@@ -1933,6 +1985,29 @@ ExecStart=/usr/lib/keel/resolve-netbios
 "
 `;
 
+exports[`/usr/lib/systemd/system/keel-hybrid-mbr.service > renders the same bytes 1`] = `
+"mode 644
+[Unit]
+Description=Keep the MBR entry a Raspberry Pi 3's boot ROM reads
+ConditionFirmware=!device-tree-compatible(brcm,bcm2711)
+ConditionFirmware=!device-tree-compatible(brcm,bcm2712)
+ConditionPathIsMountPoint=/sysroot
+DefaultDependencies=no
+Requires=sysinit.target
+# After the resize, which is what rewrites the table.
+After=sysinit.target keel-growfs.service
+Before=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/keel/hybrid-mbr
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
 exports[`/usr/lib/systemd/system/keel-mesh.service > renders the same bytes 1`] = `
 "mode 644
 [Unit]
@@ -2121,6 +2196,7 @@ enable nftables.service
 enable systemd-oomd.service
 enable keel-secrets.service
 enable keel-growfs.service
+enable keel-hybrid-mbr.service
 enable keel-firstboot.service
 enable chrony-wait.service
 enable unbound.service

@@ -70,25 +70,62 @@ echo "  reached a login prompt"
 
 # Shrinking the image is only safe because this runs on the real card, so it is
 # worth asserting on the real artefact rather than trusting the earlier tier.
-if grep -q "resizing filesystem" "${work}/console.log"; then
-    echo "  keel-growfs claimed the rest of the disk: $(
-        grep -o 'resizing filesystem from [0-9]* to [0-9]* blocks' "${work}/console.log" | tail -1)"
+#
+# Measured on the disk, never grepped off the console. This used to look for
+# "resizing filesystem from N to M blocks", which nothing emits: the chain is
+# bootc-generic-growpart -> growpart -> systemd-growfs, and systemd-growfs says
+# `Successfully resized "%s" to %s bytes` — to the journal, which is not
+# mirrored to the console this late in the boot. So the check failed on every
+# card, including the ones that grew perfectly, and the header's own warning
+# about assertions that "pass or fail for the wrong reason" was describing it.
+#
+# The partition is the evidence, and it outlives the boot: growpart rewrites the
+# table on the disk qemu just booted, so comparing partition 3's end against the
+# disk is the fact the console could only ever have gossiped about.
+#
+# Through a container because `root_partition_offset` is sfdisk and jq, and this
+# script runs on the host — the same reason finalize-card.sh does its own work
+# that way. The helper is sourced rather than reimplemented, so there is one
+# reader of a partition table in this repository and not two.
+grown_sectors=$(podman run --rm \
+    --volume "${work}:/w:ro" --volume "${here}/lib.sh:/lib.sh:ro" \
+    quay.io/fedora/fedora:43 sh -c \
+    'dnf install -y --quiet util-linux jq >/dev/null 2>&1; . /lib.sh
+     root_partition_offset /w/card.raw' | awk '{ print $2 }')
+disk_sectors=$(( $(file_size_bytes "${work}/card.raw") / 512 ))
+# Claimed means "ends within a megabyte of the disk", which is where growpart
+# leaves it: the GPT backup header lives in those last sectors.
+if [ "${grown_sectors}" -gt $(( disk_sectors - 2048 - 3125248 )) ]; then
+    echo "  keel-growfs claimed the rest of the disk: root is now ${grown_sectors} sectors"
 else
     echo "FAIL: keel-growfs did not grow the root filesystem"
-    grep -i "growfs\|resize" "${work}/console.log" | tail -20 || true
+    echo "      root is ${grown_sectors} sectors on a disk of ${disk_sectors}"
     exit 1
 fi
 
-# keel-firstboot says everything twice, and the second copy goes to /dev/kmsg
-# precisely so it lands here. `keel-firstboot:` is its prefix, so a match is the
-# script's own voice rather than an inference from something near it.
-if grep -q "keel-firstboot:" "${work}/console.log"; then
-    echo "  keel-firstboot ran:"
-    grep -o "keel-firstboot: .*" "${work}/console.log" | sed 's/^/    /'
+# growpart rewrote the partition table to do that, and a rewrite that puts back
+# a plain protective MBR leaves a card a Pi 3 boots exactly once: the ROM finds
+# the ESP on first power-on, and on every one after it finds nothing. So the
+# hybrid entries finalize-card.sh wrote are checked on the disk as it stands
+# after the boot, not as it was flashed.
+mbr_types=$(dd if="${work}/card.raw" bs=1 skip=446 count=64 2>/dev/null | od -An -tx1 -v |
+    tr -s ' \n' ' ' | awk '{ print $5, $21 }')
+if [ "${mbr_types}" = "0c ee" ]; then
+    echo "  hybrid MBR survived the first boot's growpart"
 else
-    echo "FAIL: keel-firstboot said nothing on the console"
-    grep -i "firstboot" "${work}/console.log" | tail -20 || true
+    echo "FAIL: MBR entries read '${mbr_types}' after first boot — a Pi 3 would not boot again"
     exit 1
+fi
+
+# keel-firstboot copies every line to /dev/kmsg for a serial console to read,
+# and on a Pi it gets one: the cmdline's console=ttyS0 is the mini-UART on GPIO
+# 14/15. qemu's virt machine has no ttyS0 — its serial is ttyAMA0, where only
+# the getty answers — so no printk line of any level reaches this log, and a
+# check that demanded one failed every card. Printed when present; what proves
+# firstboot ran is the banner below, which only keel.conf can have named.
+if grep -q "keel-firstboot:" "${work}/console.log"; then
+    echo "  keel-firstboot said:"
+    grep -o "keel-firstboot: .*" "${work}/console.log" | sed 's/^/    /'
 fi
 
 # The end of the chain. Reaching this name means the ESP was mounted, keel.conf

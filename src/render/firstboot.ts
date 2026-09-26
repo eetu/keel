@@ -57,9 +57,16 @@ function firstboot(): Tree {
       # couple of seconds into the boot, so a board watched over a 3.3 V adapter
       # on GPIO 14/15 — or a QEMU run watching -serial — would otherwise never
       # see a word of this.
+      #
+      # At <3>, because the image boots with quiet: that sets the console loglevel
+      # to 4 and prints only levels 0–3, and a /dev/kmsg line with no prefix is
+      # level 4 — so without it every word here reached dmesg and none reached
+      # the console this exists for. The cost is that the journal files this copy
+      # as an error, which puts firstboot's decisions in the flight recorder's
+      # warnings-and-above, the one place a failed card's reader looks first.
       say() {
           printf 'keel-firstboot: %s\\n' "$1"
-          if [ -w /dev/kmsg ]; then printf 'keel-firstboot: %s\\n' "$1" > /dev/kmsg; fi
+          if [ -w /dev/kmsg ]; then printf '<3>keel-firstboot: %s\\n' "$1" > /dev/kmsg; fi
           return 0
       }
 
