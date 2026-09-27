@@ -57,6 +57,7 @@ import { HOSTS_CONFIG_PATH, KEEL_HOSTS_SERVICE, renderHostsConfig } from "../ren
 import { MESH_INTERFACE } from "../render/mesh";
 import { isIpAddress, mountedShares } from "../render/mount";
 import { NFT_FORWARD_PATH, renderNftForward } from "../render/nftForward";
+import { NFT_GUARD_PATH, renderNftGuard } from "../render/nftGuard";
 import {
   NFT_SERVICES_PATH,
   nftSetElements,
@@ -744,6 +745,21 @@ const portsFile = new RemoteFile("nft-services", {
   mode: "644",
 });
 
+// Guards whatever the ports above open to the internet, and nothing when they
+// open nothing.
+const guardRules = renderNftGuard(
+  admitted.some(
+    (spec) => (spec.ingress?.worldTcp ?? []).length + (spec.ingress?.worldUdp ?? []).length > 0,
+  ),
+);
+const guardFile = new RemoteFile("nft-world-guard", {
+  host: sshTarget,
+  sshArgs,
+  path: NFT_GUARD_PATH,
+  content: guardRules,
+  mode: "644",
+});
+
 // One reload for the whole packet filter, because only a reload can close a
 // port: `nft -f` merges a re-declared set, so re-applying a file that no longer
 // names a port leaves it in the kernel. `nftables.service`'s ExecReload flushes
@@ -766,9 +782,11 @@ new PacketFilter(
     host: sshTarget,
     sshArgs,
     sets: nftSetElements(admitted, INSTALLATION.network.lanAddress),
-    trigger: createHash("sha256").update([portRules, forwardRules].join("\n")).digest("hex"),
+    trigger: createHash("sha256")
+      .update([portRules, forwardRules, guardRules].join("\n"))
+      .digest("hex"),
   },
-  { dependsOn: [portsFile, forwardFile] },
+  { dependsOn: [portsFile, forwardFile, guardFile] },
 );
 
 /**
