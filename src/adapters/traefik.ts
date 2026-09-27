@@ -142,6 +142,22 @@ export function traefikStatic({ domain, acmeEmail }: TraefikOptions): string {
     "log:",
     "  level: INFO",
     "",
+    // Every request, to the journal: 443 answers the internet, and without this
+    // a probe leaves no trace anywhere. Headers are dropped but the user agent,
+    // so a cookie or a bearer token never reaches the log, and query
+    // parameters with them, because an OAuth callback carries its code there.
+    "accessLog:",
+    "  format: json",
+    "  fields:",
+    "    names:",
+    "      ClientUsername: drop",
+    "    headers:",
+    "      defaultMode: drop",
+    "      names:",
+    "        User-Agent: keep",
+    "    queryParameters:",
+    "      defaultMode: drop",
+    "",
     "ping:",
     // Named rather than left to default onto the `traefik` entry point at
     // :8080, which under host networking is a port another service binds.
@@ -156,6 +172,13 @@ export function traefikStatic({ domain, acmeEmail }: TraefikOptions): string {
     "      aliasHeadersStrategy: delete",
     "  websecure:",
     '    address: ":443"',
+    // The default 60s bounds a whole request, body included, and netbird's
+    // management and signal streams are gRPC requests that stay open: each was
+    // cut every minute and reconnected. Not zero, because this port answers the
+    // internet and an unbounded read is a slow client holding it forever.
+    "    transport:",
+    "      respondingTimeouts:",
+    "        readTimeout: 1h",
     "    http:",
     // A header whose name merely aliases another — `X_Auth_Request_User` for
     // `X-Auth-Request-User` — is read as the header it aliases by anything that
