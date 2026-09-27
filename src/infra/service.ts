@@ -512,6 +512,30 @@ export default class Service extends pulumi.ComponentResource {
       { ...parent, dependsOn: [...deps, ...loaded] },
     );
 
+    // Behind the unit and the files, so a reload is never a start and always
+    // re-reads the content this run wrote.
+    const reloading = files.flatMap((entry, index) =>
+      entry.restarts === false ? [{ entry, file: extraFiles[index]! }] : [],
+    );
+    if (
+      spec.reloadCmd !== undefined &&
+      reloading.length > 0 &&
+      runtime === `${spec.name}.service`
+    ) {
+      new SystemdUnit(
+        `${spec.name}-reload`,
+        {
+          host,
+          sshArgs,
+          unit: runtime,
+          quadlet: true,
+          action: "reload",
+          trigger: sha256(reloading.map(({ entry }) => sha256(entry.content)).join("")),
+        },
+        { ...parent, dependsOn: [this.unit, ...reloading.map(({ file }) => file)] },
+      );
+    }
+
     // Behind the unit, because the lists are changed by calling the service.
     if (spec.adlists !== undefined) {
       new PiholeLists(

@@ -223,6 +223,7 @@ HealthStartupInterval=5s
 HealthInterval=60s
 HealthStartPeriod=10s
 Notify=healthy
+ReloadCmd=pihole reloaddns
 
 [Service]
 ExecStartPre=/usr/bin/mkdir -p /var/lib/pihole

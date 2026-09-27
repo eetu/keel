@@ -466,6 +466,9 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     // check is a query for Pi-hole's own name, which is the actual contract:
     // +norecurse so it tests this resolver rather than the internet behind it.
     healthCmd: "dig +norecurse +retry=0 @127.0.0.1 pi.hole",
+    // Flushes the cache. A name answered NXDOMAIN before its line existed keeps
+    // that answer for the negative TTL after dnsmasq has read the line.
+    reloadCmd: "pihole reloaddns",
     // The exact set, owned by the deploy. StevenBlack is Pi-hole's own default;
     // hagezi's pro, threat-intelligence and pop-up lists are the ones a clone
     // is offered, and none of them names a house.
@@ -497,10 +500,10 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
           {
             name: "hosts",
             path: `${PIHOLE_DATA_DIR}/hosts/keel.list`,
-            // dnsmasq re-reads `hostsdir` on change (inotify) — proven live on
-            // the board, a three-second turnaround with no reload and no
-            // restart. Restarting Pi-hole for one record would be LAN DNS
-            // downtime to add a line.
+            // dnsmasq re-reads `hostsdir` on change (inotify), and the reload
+            // this marks it for clears the cache it answered from before.
+            // Restarting Pi-hole for one record would be LAN DNS downtime to
+            // add a line.
             restarts: false,
             content:
               [
