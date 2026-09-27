@@ -121,8 +121,22 @@ describe("what the kernel is checked against", () => {
       "mesh_udp",
       "world_tcp",
       "world_udp",
+      "proxy_tcp",
+      "proxy4",
     ]);
     expect(lines).toContain("world_tcp=");
+  });
+
+  it("names the proxy's address only where a routed port needs it", () => {
+    // proxy4 is what proxy_tcp answers; on a board with no routed service both
+    // are empty, so the reading a board without either set gives matches.
+    expect(nftSetElements(specs, "192.0.2.1").split("\n")).toContain("proxy4=");
+    const routed = [{ ...SERVICES[0]!, ingress: { proxyTcp: [4533] } }];
+    const lines = nftSetElements(routed, "192.0.2.1").split("\n");
+    expect(lines).toContain("proxy_tcp=4533");
+    expect(lines).toContain("proxy4=192.0.2.1");
+    expect(renderNftServices(routed, "192.0.2.1")).toContain("elements = { 192.0.2.1 }");
+    expect(() => renderNftServices(routed, "")).toThrow(/IPv4/);
   });
 
   it("is the union, deduplicated and sorted, whatever order the catalog is in", () => {

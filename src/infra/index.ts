@@ -33,11 +33,12 @@ import {
   deployedAccountEmail,
   deploymentGaps,
   fleetCatalog,
-  hostServices,
   orderServices,
+  placedRemotes,
   publicRecords,
   remotesRoutedBy,
   resolveSecretRefs,
+  routedServices,
   runSetup,
   secretFields,
   secretsPath,
@@ -167,7 +168,7 @@ if (unknown.length > 0) {
       `is called — known: ${SERVICES.map((spec) => spec.name).join(", ")}`,
   );
 }
-const mine = hostServices(host, SERVICES);
+const mine = routedServices(INSTALLATION, SERVICES, hostName);
 
 /**
  * Which deployed entry is the proxy, the identity provider and the gate. Resolved
@@ -179,10 +180,11 @@ const mine = hostServices(host, SERVICES);
  * Remotes are not selected by the host's `services` list, since nothing about
  * one runs on any board. They go to whichever host runs the proxy.
  */
-const catalog = catalogOf(mine, remotesRoutedBy(mine, REMOTES));
+const remotes = [...REMOTES, ...placedRemotes(INSTALLATION, SERVICES)];
+const catalog = catalogOf(mine, remotesRoutedBy(mine, remotes));
 
 /** Every vhost on the LAN, for a setup that writes names rather than routes. */
-const fleet = fleetCatalog(INSTALLATION, SERVICES, REMOTES) ?? catalog;
+const fleet = fleetCatalog(INSTALLATION, SERVICES, remotes) ?? catalog;
 
 /**
  * Everything the deployed set names and would not find, raised while the plan is
@@ -699,7 +701,7 @@ const admitted =
   publicProxy === null
     ? mine
     : mine.map((spec) => (spec.name === publicProxy.name ? publicProxy : spec));
-const portRules = renderNftServices(admitted);
+const portRules = renderNftServices(admitted, INSTALLATION.network.lanAddress);
 const portsFile = new RemoteFile("nft-services", {
   host: sshTarget,
   sshArgs,
@@ -729,7 +731,7 @@ new PacketFilter(
   {
     host: sshTarget,
     sshArgs,
-    sets: nftSetElements(admitted),
+    sets: nftSetElements(admitted, INSTALLATION.network.lanAddress),
     trigger: createHash("sha256").update([portRules, forwardRules].join("\n")).digest("hex"),
   },
   { dependsOn: [portsFile, forwardFile] },

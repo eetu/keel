@@ -344,6 +344,19 @@ describe("a unit whose steady state is inactive", () => {
       expect((await packetFilterProvider.diff!("id", applied, filter)).changes).toBe(false);
     });
 
+    it("refuses a routed port on an image whose input chain never reads it", async () => {
+      // The drop-in creates proxy_tcp whether or not a rule reads it, so an
+      // image from before the rule takes the port, admits nothing, and would
+      // report success while the other board's proxy answers 502.
+      const routed = { ...filter, sets: `${filter.sets}\nproxy_tcp=4533\nproxy4=192.0.2.1` };
+      await withRecordingSsh(async () => {
+        await expect(packetFilterProvider.create!(routed)).rejects.toThrow(/@proxy_tcp/);
+      }, "table inet keel { chain input { tcp dport @lan_tcp accept } }");
+      await withRecordingSsh(async () => {
+        await expect(packetFilterProvider.create!(routed)).resolves.toBeDefined();
+      }, "table inet keel { chain input { ip saddr @proxy4 tcp dport @proxy_tcp accept } }");
+    });
+
     it("leaves the filter running when the declaration goes away", async () => {
       // The unit is the image's. A `pulumi destroy` removes what Pulumi put on
       // the board; turning off the packet filter is not among those things.

@@ -361,6 +361,12 @@ export type Host = {
    */
   services?: readonly string[];
   /**
+   * The board's LAN address, reserved on the router. What the proxy on another
+   * board dials a service here at, so it is needed exactly when this board runs
+   * a vhost service and not the proxy — the deploy stops by name otherwise.
+   */
+  address?: string;
+  /**
    * Nightly restic snapshots to `INSTALLATION.backup`. Off unless stated: the
    * backup deploys something no catalog entry declares, wanting the share
    * already standing and three vault fields of its own, so a first deploy is not

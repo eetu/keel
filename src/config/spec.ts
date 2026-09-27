@@ -70,6 +70,12 @@ export type Ingress = {
   meshUdp?: readonly number[];
   worldTcp?: readonly number[];
   worldUdp?: readonly number[];
+  /**
+   * Admitted from the proxy host's address only. Never declared on an entry:
+   * the deploy adds it on the board a routed service runs on — see
+   * `routedServices`.
+   */
+  proxyTcp?: readonly number[];
 };
 
 /**
@@ -972,10 +978,126 @@ export function fleetCatalog(
   specs: readonly ServiceSpec[],
   remotes: readonly RemoteSpec[],
 ): Catalog | undefined {
-  const proxied = Object.values(installation.hosts)
-    .map((host) => hostServices(host, specs))
-    .filter((set) => roles(set).proxy !== undefined);
-  return proxied.length === 1 ? catalogOf(proxied[0]!, remotes) : undefined;
+  const name = proxyHostName(installation, specs);
+  return name === undefined
+    ? undefined
+    : catalogOf(hostServices(installation.hosts[name]!, specs), remotes);
+}
+
+/** The one host that runs the proxy, by name; undefined for none or several. */
+export function proxyHostName(
+  installation: Installation,
+  specs: readonly ServiceSpec[],
+): string | undefined {
+  const names = Object.entries(installation.hosts)
+    .filter(([, host]) => roles(hostServices(host, specs)).proxy !== undefined)
+    .map(([name]) => name);
+  return names.length === 1 ? names[0] : undefined;
+}
+
+type Routed = { host: string; spec: ServiceSpec; remote: RemoteSpec };
+
+/**
+ * Every vhost service that runs on a board without the proxy, and so is reached
+ * through the proxy on another board — with the remote that proxy routes it by.
+ *
+ * One declaration drives both halves. On the proxy's host the service is a
+ * remote to `http://<address>:<port>`, which is a route, a LAN record, a check
+ * and — with `publicDns` — a public record, none of them written by hand. On
+ * its own board it is published on the LAN and admitted from the proxy's
+ * address only.
+ *
+ * A service the proxy's host also runs keeps its name there, and the copy on
+ * another board is a replica — the second resolver — routed under that board's
+ * name: `pihole-raspo` on `pihole-raspo.<domain>`, behind the same gate. So a
+ * replica's UI is a bookmark on any device rather than an ssh tunnel, and the
+ * remote gives it a check of its own. A service with several routers or socket
+ * activation is refused rather than half-routed — neither has a shape a single
+ * upstream carries yet.
+ */
+function routed(installation: Installation, specs: readonly ServiceSpec[]): readonly Routed[] {
+  const proxyName = proxyHostName(installation, specs);
+  if (proxyName === undefined) return [];
+  const served = new Set(hostServices(installation.hosts[proxyName]!, specs).map((s) => s.name));
+  const found: Routed[] = [];
+  for (const [name, host] of Object.entries(installation.hosts)) {
+    if (name === proxyName) continue;
+    for (const spec of hostServices(host, specs)) {
+      const subdomain = subdomainOf(spec);
+      if (subdomain === null) continue;
+      const replica = served.has(spec.name);
+      if (host.address === undefined) {
+        throw new Error(
+          `${name} runs ${spec.name}, which the proxy on ${proxyName} routes to, and states no ` +
+            "address for it to dial",
+        );
+      }
+      const activated = spec.idleStop !== undefined && spec.schedule === undefined;
+      if (spec.routers !== undefined || activated) {
+        throw new Error(
+          `${spec.name} runs on ${name}, off the proxy's board, and ` +
+            (spec.routers !== undefined
+              ? "divides its vhost between routers"
+              : "is socket-activated") +
+            ", which a route to another board does not carry",
+        );
+      }
+      found.push({
+        host: name,
+        spec,
+        remote: {
+          name: replica ? `${spec.name}-${name}` : spec.name,
+          description: replica ? `${spec.description} (the copy on ${name})` : spec.description,
+          subdomain: replica ? `${subdomain}-${name}` : subdomain,
+          upstream: `http://${host.address}:${spec.port}`,
+          // oidc and open render the same route — no gate, the app runs its own
+          // login — and a remote cannot carry oidc.
+          auth: spec.auth === "oidc" ? "open" : spec.auth,
+          ...(spec.publicDns === undefined ? {} : { publicDns: spec.publicDns }),
+        },
+      });
+    }
+  }
+  return found;
+}
+
+/** The remotes the proxy's host routes to services on other boards. */
+export function placedRemotes(
+  installation: Installation,
+  specs: readonly ServiceSpec[],
+): readonly RemoteSpec[] {
+  return routed(installation, specs).map((entry) => entry.remote);
+}
+
+/**
+ * What `hostName` deploys, with each service another board's proxy routes to
+ * admitted from that proxy: `proxyTcp` on its port, which is also what publishes
+ * a bridge service on the LAN rather than on loopback, and what a setup reads
+ * through `isRouted` to bind and trust accordingly.
+ */
+export function routedServices(
+  installation: Installation,
+  specs: readonly ServiceSpec[],
+  hostName: string,
+): readonly ServiceSpec[] {
+  const here = new Set(
+    routed(installation, specs)
+      .filter((entry) => entry.host === hostName)
+      .map((entry) => entry.spec.name),
+  );
+  return hostServices(installation.hosts[hostName]!, specs).map((spec) =>
+    here.has(spec.name) ? { ...spec, ingress: { ...spec.ingress, proxyTcp: [spec.port] } } : spec,
+  );
+}
+
+/**
+ * Whether this entry is reached through another board's proxy. Such an entry
+ * listens on its board's LAN address, and an `edge` one trusts the identity
+ * header from `installation.network.lanAddress` — the proxy — rather than from
+ * loopback or the bridge gateway.
+ */
+export function isRouted(spec: ServiceSpec): boolean {
+  return (spec.ingress?.proxyTcp?.length ?? 0) > 0;
 }
 
 /** Those roles beside the set they came from, which is what a setup is handed. */
@@ -1434,7 +1556,10 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
   }
 
   if (catalog.proxy === undefined) {
-    const stranded = catalog.services.filter((spec) => subdomainOf(spec) !== null);
+    // A routed service has its route on the proxy's board, so it is not stranded.
+    const stranded = catalog.services.filter(
+      (spec) => subdomainOf(spec) !== null && !isRouted(spec),
+    );
     if (stranded.length > 0) {
       warnings.push(`no deployed proxy routes to these vhosts: ${named(stranded)}`);
     }

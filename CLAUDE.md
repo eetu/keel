@@ -682,6 +682,23 @@ service except `oidc`, which a remote is refused outright — it runs its own
 login flow or none, because the board has no client to hand something it does
 not run.
 
+**A service on another board is routed, never declared twice.** Moving a vhost
+service off the proxy's board is its name in that board's `services` list and
+the board's `address` — nothing else. `placedRemotes` turns every such service
+into a remote on the proxy's host (route, LAN record, check, public record),
+and `routedServices` gives it `ingress.proxyTcp` on its own board: published on
+the LAN instead of loopback, and admitted by `@proxy4 @proxy_tcp` from the
+proxy's address alone. The last part is the security property. An `edge` app
+trusts the identity header the proxy sets, so one the whole LAN could dial
+directly would take the header from anyone. A setup reads `isRouted(self)` for
+what only the application can say — a bind on the LAN, and a header allowlist
+naming `network.lanAddress` rather than loopback or the bridge gateway. A
+service the proxy's board also runs is a replica, routed under its board's name
+(`pihole-raspo` on `pihole-raspo.<domain>`), so its UI is a bookmark rather
+than an ssh tunnel. The rule and sets are the image's, and `PacketFilter` refuses a
+routed port on a board whose booted image predates them — so the image lands
+before the first move.
+
 **A vhost may carry more than one router, and the priorities are the entry's to
 state.** `routers` on a `ServiceSpec` replaces the single router a vhost derives
 with one router and one load balancer per element — a suffix on the entry's name,
