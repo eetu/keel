@@ -146,6 +146,7 @@ yarn preview:fast -s <host>   # the same without --refresh: reads nothing on the
 yarn deploy -s <host>         # one refresh, then pulumi up; vault- and .env-loaded
 yarn deploy:fast -s <host>    # the same without --refresh: touches only what changed
 yarn bootstrap -s <host>      # the same, for a board whose coordinator is down
+yarn update                   # bump the local catalog pins Renovate cannot see, asking first
 ```
 
 The `:fast` pair skips the refresh, so it is for a change made in this
