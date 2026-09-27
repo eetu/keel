@@ -4,7 +4,7 @@
  *
  *   yarn preview      -s <host>   # pulumi preview --refresh --parallel 4
  *   yarn preview:fast -s <host>   # pulumi preview --parallel 4
- *   yarn deploy       -s <host>   # pulumi up --refresh --parallel 4
+ *   yarn deploy       -s <host>   # refresh once, then pulumi up --parallel 4
  *   yarn deploy:fast  -s <host>   # pulumi up --parallel 4
  *
  * Neither value may be typed into a committed script. `PULUMI_CONFIG_PASSPHRASE`
@@ -32,6 +32,7 @@ import { CLOUDFLARE_FIELD, CLOUDFLARE_ITEM } from "../src/config/cloudflare";
 import { INSTALLATION } from "../src/config/installation";
 import { readField } from "../src/infra/vault";
 import { dotenv, repo } from "./dotenv";
+import { splitRefresh } from "./refreshOnce";
 
 /**
  * The `cloudflare` item is a login whose password field is the API token — the
@@ -90,20 +91,26 @@ if (token === "") {
   process.exit(1);
 }
 
-const child = spawn(
-  fileURLToPath(new URL("node_modules/.bin/pulumi", repo)),
-  process.argv.slice(2),
-  {
-    cwd: fileURLToPath(repo),
-    stdio: "inherit",
-    env: { ...dotenv(), ...process.env, CLOUDFLARE_API_TOKEN: token },
-  },
-);
+function pulumi(args: readonly string[]): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(fileURLToPath(new URL("node_modules/.bin/pulumi", repo)), args, {
+      cwd: fileURLToPath(repo),
+      stdio: "inherit",
+      env: { ...dotenv(), ...process.env, CLOUDFLARE_API_TOKEN: token },
+    });
+    child.on("error", (error) => {
+      console.error(`could not run the vendored pulumi: ${error.message}`);
+      resolve(1);
+    });
+    // A signal is not an exit code; reporting one as 0 would let a killed
+    // deploy look like a clean one to whatever ran this.
+    child.on("exit", (code, signal) => resolve(signal === null ? (code ?? 1) : 1));
+  });
+}
 
-child.on("error", (error) => {
-  console.error(`could not run the vendored pulumi: ${error.message}`);
-  process.exit(1);
-});
-// A signal is not an exit code; reporting one as 0 would let a killed deploy
-// look like a clean one to whatever ran this.
-child.on("exit", (code, signal) => process.exit(signal === null ? (code ?? 1) : 1));
+const split = splitRefresh(process.argv.slice(2));
+if (split === null) {
+  process.exit(await pulumi(process.argv.slice(2)));
+}
+const refreshed = await pulumi(split.refresh);
+process.exit(refreshed === 0 ? await pulumi(split.up) : refreshed);
