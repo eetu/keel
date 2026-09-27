@@ -16,7 +16,7 @@ import {
   piholeListsProvider,
   wanted,
 } from "../src/infra/providers/piholeLists";
-import { assertWritablePath } from "../src/infra/providers/remoteFile";
+import { assertWritablePath, remoteFileProvider } from "../src/infra/providers/remoteFile";
 import { assertCiphertext } from "../src/infra/providers/secretFile";
 import { type SystemdUnitInputs, systemdUnitProvider } from "../src/infra/providers/systemdUnit";
 import { assertSafePath, assertSafeUnit, run } from "../src/infra/ssh";
@@ -315,6 +315,34 @@ describe("a unit whose steady state is inactive", () => {
         enabled: "enabled",
       });
       expect(calls()).toEqual([]);
+    });
+  });
+
+  describe("a file written into a container's volume", () => {
+    const hosts = {
+      host: "nowhere",
+      path: "/var/lib/pihole/hosts/keel.list",
+      content: "192.0.2.1 example\n",
+      mode: "644",
+    };
+
+    it("takes its directory's label, which is what :Z would give it", async () => {
+      // install labels a new file by its path — var_lib_t — and the running
+      // container cannot read that: the resolver kept answering from the copy
+      // it loaded at start and every name added since went missing.
+      await withRecordingSsh(async (calls) => {
+        await remoteFileProvider.create!(hosts);
+        expect(calls().join("\n")).toContain(
+          "chcon --reference=/var/lib/pihole/hosts /var/lib/pihole/hosts/keel.list",
+        );
+      }, "system_u:object_r:container_file_t:s0:c404,c523");
+    });
+
+    it("keeps the policy's label anywhere else", async () => {
+      await withRecordingSsh(async (calls) => {
+        await remoteFileProvider.create!({ ...hosts, path: "/etc/keel/nft.d/50-services.nft" });
+        expect(calls().join("\n")).not.toContain("chcon");
+      }, "system_u:object_r:etc_t:s0");
     });
   });
 

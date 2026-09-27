@@ -60,6 +60,24 @@ const write = async (inputs: RemoteFileInputs): Promise<void> => {
     inputs.content,
     inputs.sshArgs,
   );
+  // `install` gives a new file the policy's default label for its path —
+  // var_lib_t under /var/lib — and a container volume mounted `:Z` carries
+  // container_file_t with that container's own categories, which podman applies
+  // only when the container starts. So a file rewritten into a running
+  // container's volume was unreadable to it until its next restart, and one
+  // declared `restarts: false` — a hosts file the resolver re-reads by itself —
+  // was never read at all: new LAN names went missing with nothing failing.
+  // Such a file takes its directory's label, which is what `:Z` would give it.
+  const dir = inputs.path.slice(0, inputs.path.lastIndexOf("/")) || "/";
+  const label = await runOk(inputs.host, ["stat", "-c", "%C", dir], undefined, inputs.sshArgs);
+  if (label.includes(":container_file_t:")) {
+    await runOk(
+      inputs.host,
+      ["chcon", `--reference=${dir}`, inputs.path],
+      undefined,
+      inputs.sshArgs,
+    );
+  }
 };
 
 const provider: pulumi.dynamic.ResourceProvider<RemoteFileInputs, Outs> = {
@@ -132,6 +150,9 @@ const provider: pulumi.dynamic.ResourceProvider<RemoteFileInputs, Outs> = {
     await runOk(props.host, ["rm", "-f", props.path], undefined, props.sshArgs);
   },
 };
+
+/** The provider, so what `write` does to a label is an assertion rather than prose. */
+export const remoteFileProvider = provider;
 
 export class RemoteFile extends pulumi.dynamic.Resource {
   declare public readonly content: pulumi.Output<string>;
