@@ -61,6 +61,8 @@ export const INSTALLATION: Installation = {
   },
 
   publicHosts: [],
+  // Zone records no entry derives, such as a mail provider's:
+  // records: [{ type: "MX", name: "@", content: "mail.example.net", priority: 10 }],
 
   /**
    * Where a failure is posted — the image's five-minute poller and the status
