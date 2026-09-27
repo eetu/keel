@@ -33,12 +33,15 @@ import {
   deployedAccountEmail,
   deploymentGaps,
   fleetCatalog,
+  fleetServices,
   isRouted,
   orderServices,
   placedRemotes,
   publicRecords,
   remotesRoutedBy,
   resolveSecretRefs,
+  roleHost,
+  roles,
   routedServices,
   runSetup,
   secretFields,
@@ -189,12 +192,23 @@ const catalog = catalogOf(mine, remotesRoutedBy(mine, remotes));
 const fleet = fleetCatalog(INSTALLATION, SERVICES, remotes) ?? catalog;
 
 /**
+ * Roles wherever in the fleet they run, for a setup that reaches one on another
+ * board and for the resource that makes an account on the hub there.
+ */
+const everywhere = roles(fleetServices(INSTALLATION, SERVICES));
+const hubHost = roleHost(INSTALLATION, SERVICES, "metrics");
+const hub =
+  everywhere.metrics === undefined || hubHost === undefined
+    ? undefined
+    : { host: hubHost === hostName ? sshTarget : hubHost, claimed: everywhere.metrics };
+
+/**
  * Everything the deployed set names and would not find, raised while the plan is
  * still on someone's screen. A route referencing a middleware the proxy has no
  * definition for is a router it refuses to build: the vhost fails closed, with
  * the reason in a log nobody is reading. That is the failure this exists for.
  */
-const gaps = deploymentGaps(catalog, fleet);
+const gaps = deploymentGaps(catalog, fleet, everywhere);
 for (const warning of gaps.warnings) pulumi.log.warn(warning);
 if (gaps.errors.length > 0) {
   throw new Error(`${sshTarget}: ${gaps.errors.join("; ")}`);
@@ -349,7 +363,7 @@ const networks = mine.some((spec) => (spec.egress ?? "internal") !== "host")
  * runs after the reload and the reload would re-read the copy still on disk.
  */
 const routesTheMesh = mine.some(
-  (spec) => runSetup(spec, INSTALLATION, catalog, fleet)?.mesh?.agent !== undefined,
+  (spec) => runSetup(spec, INSTALLATION, catalog, fleet, everywhere)?.mesh?.agent !== undefined,
 );
 const forwardRules = renderNftForward(
   mine.some((spec) => (spec.egress ?? "internal") === "open"),
@@ -392,7 +406,7 @@ for (const spec of ordered) {
   // the entry itself from the house and the roles beside it. Nothing here decides
   // what a particular service needs. Pure, so reading it costs nothing and it is
   // read before the secrets, one of which it can ask for.
-  const setup = runSetup(spec, INSTALLATION, catalog, fleet);
+  const setup = runSetup(spec, INSTALLATION, catalog, fleet, everywhere);
 
   // Read, seal, write — all three inside the resource. What reaches the state
   // file is ciphertext and a hash; the identity that opens it lives only on the
@@ -462,6 +476,7 @@ for (const spec of ordered) {
       files: setup?.files,
       secretFiles: setup?.secretFiles,
       catalog,
+      hub,
       // The same edges, as the resources themselves: a credential this service's
       // own resources generate is created by calling a service that is up.
       needs,
@@ -511,7 +526,7 @@ for (const spec of mine) {
   // entry that declares one without the other has nothing to authenticate as,
   // and that is a plan refused here rather than a provider configured with an
   // empty credential and a run that fails resource by resource.
-  const mesh = runSetup(spec, INSTALLATION, catalog, fleet)?.mesh;
+  const mesh = runSetup(spec, INSTALLATION, catalog, fleet, everywhere)?.mesh;
   if (bootstrap === undefined) {
     if (mesh !== undefined) {
       throw new Error(

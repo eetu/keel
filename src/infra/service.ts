@@ -28,8 +28,10 @@ import { selectProfile } from "../config/profiles";
 import {
   backupPath,
   type Catalog,
+  type Claimed,
   deployedAccountEmail,
   isSecretsPath,
+  type MetricsRole,
   metricsSecretsPath,
   SECRETS_DIR,
   secretsPath,
@@ -102,6 +104,11 @@ export type ServiceArgs = {
    */
   catalog: Catalog;
   /**
+   * The metrics hub and the board it runs on, which may not be this one — the
+   * account a `metricsAccount` declares is made by calling the hub there.
+   */
+  hub?: { host: string; claimed: Claimed<MetricsRole> };
+  /**
    * The resources of the services this one is started after — the same edges
    * `dependencyNames` derives, as the units themselves. A credential generated
    * on another service is created against a hub that is answering, and that is
@@ -143,6 +150,7 @@ export default class Service extends pulumi.ComponentResource {
       files = [],
       secretFiles = [],
       catalog,
+      hub,
       needs = [],
       ageRecipient,
       sshArgs,
@@ -296,24 +304,25 @@ export default class Service extends pulumi.ComponentResource {
     // to satisfy it.
     const metricsPath = metricsSecretsPath(spec);
     const account =
-      spec.metricsAccount === undefined || catalog.metrics === undefined || !ageRecipient
+      spec.metricsAccount === undefined || hub === undefined || !ageRecipient
         ? undefined
         : new MetricsAccount(
             `${spec.name}-metrics-account`,
             {
-              host,
+              // The hub's board, which is this one or another: an account is
+              // made by calling the hub, so the call runs where the hub is.
+              host: hub.host,
               sshArgs,
               vault: INSTALLATION.vault,
-              item: catalog.metrics.spec.vaultItem ?? catalog.metrics.spec.name,
-              // Loopback, because the hub is talked to from the board rather
-              // than from here — the same address this service's own
-              // configuration dials it on, and the only one that needs no
-              // opinion about whether a laptop can route to the LAN.
-              hubUrl: `http://127.0.0.1:${catalog.metrics.spec.port}`,
+              item: hub.claimed.spec.vaultItem ?? hub.claimed.spec.name,
+              // Loopback on the hub's own board, because the hub is talked to
+              // from a board rather than from here — which needs no opinion
+              // about whether a laptop can route to the LAN.
+              hubUrl: `http://127.0.0.1:${hub.claimed.spec.port}`,
               email: deployedAccountEmail(spec, INSTALLATION.network.domain),
               role: spec.metricsAccount.role,
-              api: catalog.metrics.role.api,
-              superuser: catalog.metrics.role.superuser,
+              api: hub.claimed.role.api,
+              superuser: hub.claimed.role.superuser,
               envNames: spec.metricsAccount.env,
               ageRecipient,
             },

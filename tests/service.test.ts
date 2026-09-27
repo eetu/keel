@@ -19,6 +19,7 @@ import {
   catalogOf,
   deploymentGaps,
   fleetCatalog,
+  fleetServices,
   hostServices,
   type Ingress,
   isRouted,
@@ -28,6 +29,7 @@ import {
   publicRecords,
   type RemoteSpec,
   remotesRoutedBy,
+  roleHost,
   routedServices,
   runSetup,
   secretFields,
@@ -1057,6 +1059,7 @@ describe("a service on a board without the proxy", () => {
       installation: INSTALLATION,
       catalog: alone,
       fleet,
+      reach: () => undefined,
       origin: (spec?: ServiceSpec) => serviceOrigin(spec ?? client, INSTALLATION.network.domain),
     };
     expect(oidcClientEnv(context).OIDC_ISSUER).toBe(
@@ -1067,6 +1070,37 @@ describe("a service on a board without the proxy", () => {
     );
     expect(deploymentGaps(alone, fleet).errors.join("\n")).not.toMatch(/identity role/);
     expect(deploymentGaps(alone).errors.join("\n")).toMatch(/identity role/);
+  });
+
+  it("finds a role on whichever board runs it, and reaches it from there", () => {
+    // What a setup on one board needs of an entry on another — the metrics hub
+    // for an agent and a dashboard — is asked of the fleet, and the answer is a
+    // URL that works from the caller's board: loopback beside it, its vhost
+    // from anywhere else.
+    const identity = catalogOf(EXAMPLE_SERVICES).identity!.spec;
+    const i = {
+      ...INSTALLATION,
+      hosts: {
+        edge: { ramMb: 1024, services: rest },
+        spare: { ramMb: 1024, address: "192.0.2.10", services: ["vaultwarden"] },
+      },
+    };
+    expect(roleHost(i, EXAMPLE_SERVICES, "identity")).toBe("edge");
+    expect(
+      fleetServices(i, EXAMPLE_SERVICES)
+        .map((spec) => spec.name)
+        .sort(),
+    ).toEqual(EXAMPLE_SERVICES.map((spec) => spec.name).sort());
+    const everywhere = catalogOf(fleetServices(i, EXAMPLE_SERVICES));
+    const probe = {
+      ...vault,
+      setup: ({ reach }: SetupContext) => ({ env: { ISSUER_BASE: reach("identity") ?? "" } }),
+    };
+    const onEdge = runSetup(probe, i, catalogOf(EXAMPLE_SERVICES), undefined, everywhere);
+    const onSpare = runSetup(probe, i, catalogOf([probe]), undefined, everywhere);
+    expect(onEdge?.env?.ISSUER_BASE).toBe(`http://127.0.0.1:${identity.port}`);
+    expect(onSpare?.env?.ISSUER_BASE).toBe(serviceOrigin(identity, i.network.domain));
+    expect(runSetup(probe, i, catalogOf([probe]))?.env?.ISSUER_BASE).toBe("");
   });
 
   it("names the state a move takes out of every snapshot", () => {
