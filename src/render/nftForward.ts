@@ -48,8 +48,21 @@ const FORWARD_CHAIN_SPEC = "        type filter hook forward priority filter; po
  * originates — and nothing on the LAN can open a connection into the overlay,
  * which is the same direction the old repository's one `route allow in` had.
  */
-export function renderNftForward(open: boolean, meshInterface?: string): string {
+export function renderNftForward(
+  open: boolean,
+  meshInterface?: string,
+  routedBridge = false,
+): string {
   const rules = [
+    ...(routedBridge
+      ? [
+          "        # A bridge service another board's proxy routes to. Its published",
+          "        # port is DNAT'd to the container, so the connection crosses this",
+          "        # chain rather than input — matched on the port it was sent to,",
+          "        # before the DNAT, which is what proxy_tcp holds.",
+          "        ip saddr @proxy4 ct status dnat ct original proto-dst @proxy_tcp accept",
+        ]
+      : []),
     ...(open
       ? [
           "        # Egress for the open bridge. The image's keel.nft carries the same",

@@ -165,6 +165,18 @@ describe("the open bridge's forward rule", () => {
     expect(none).not.toContain("iifname");
     expect(none).toMatch(/^#/);
   });
+
+  it("forwards a routed bridge service's DNAT from the proxy alone", () => {
+    // A published bridge port is DNAT'd to the container, so the connection
+    // crosses forward and never input: without this, the input rule admitted a
+    // port the forward chain then dropped, and the route answered 502. Matched
+    // on the pre-DNAT port, which is what proxy_tcp holds.
+    const rules = renderNftForward(false, undefined, true);
+    expect(rules).toContain(
+      "ip saddr @proxy4 ct status dnat ct original proto-dst @proxy_tcp accept",
+    );
+    expect(renderNftForward(false)).not.toContain("proxy_tcp");
+  });
 });
 
 describe("the one path in the set that is no service's", () => {
