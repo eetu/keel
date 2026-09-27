@@ -32,4 +32,9 @@ source_url=$(printf '%s' "${source_url}" | sed -e 's#^git@\([^:]*\):#https://\1/
 podman build --arch arm64 --build-arg "SOURCE_URL=${source_url}" \
     --tag "${tag}" --file image/Containerfile .
 
+# Each rebuild leaves the image it replaced behind as untagged layers, and a day
+# of card builds left 162 of them — most of the podman machine's disk. Dangling
+# only: the tag just built and every image a tag names stay.
+podman image prune --force >/dev/null
+
 echo "built ${tag}"
