@@ -602,6 +602,11 @@ export type SetupContext = {
   self: ServiceSpec;
   installation: Installation;
   catalog: Catalog;
+  /**
+   * The proxy host's catalog — see `fleetCatalog`. The same as `catalog` on that
+   * host; on any other, what a reading of the LAN's names wants instead.
+   */
+  fleet: Catalog;
   /** `https://<subdomain>.<domain>` — this entry's own vhost unless told otherwise. */
   origin: (spec?: ServiceSpec) => string;
 };
@@ -927,6 +932,35 @@ export function remotesRoutedBy(
   return roles(specs).proxy === undefined ? [] : remotes;
 }
 
+/** What a host deploys: the whole catalog, or exactly the entries its list names. */
+export function hostServices(
+  host: Installation["hosts"][string],
+  specs: readonly ServiceSpec[],
+): readonly ServiceSpec[] {
+  const listed = host.services;
+  return listed === undefined ? specs : specs.filter((spec) => listed.includes(spec.name));
+}
+
+/**
+ * The catalog of the host that runs the proxy, which is where every vhost on the
+ * LAN resolves. A resolver on another board needs this and not its own set: its
+ * hosts file must name the same vhosts as the first one's, all pointing at the
+ * proxy, or the second resolver answers for nothing the house uses.
+ *
+ * Undefined unless exactly one host runs the proxy — with none there is nothing
+ * to resolve to, and with two there is no answer to which one a name means.
+ */
+export function fleetCatalog(
+  installation: Installation,
+  specs: readonly ServiceSpec[],
+  remotes: readonly RemoteSpec[],
+): Catalog | undefined {
+  const proxied = Object.values(installation.hosts)
+    .map((host) => hostServices(host, specs))
+    .filter((set) => roles(set).proxy !== undefined);
+  return proxied.length === 1 ? catalogOf(proxied[0]!, remotes) : undefined;
+}
+
 /** Those roles beside the set they came from, which is what a setup is handed. */
 export function catalogOf(
   specs: readonly ServiceSpec[],
@@ -954,12 +988,17 @@ export function vhosts(catalog: Catalog): readonly { name: string; subdomain: st
  * `publicDns: true`, in the same order — a Cloudflare record and a Pi-hole line
  * are the same subdomain, arrived at the same way, from two different readings
  * of one list.
+ *
+ * Only on the host that runs the proxy, which is the address every one of them
+ * points at: a second stack declaring the same name would fight the first over
+ * one Cloudflare record.
  */
 export function publicRecords(
   catalog: Catalog,
   network: Network,
   publicHosts: readonly string[] = [],
 ): readonly { name: string; fqdn: string; content: string }[] {
+  if (catalog.proxy === undefined) return [];
   const opted = new Set([
     ...catalog.services.filter((spec) => spec.publicDns === true).map((spec) => spec.name),
     ...catalog.remotes.filter((remote) => remote.publicDns === true).map((remote) => remote.name),
@@ -986,13 +1025,15 @@ export function publicRecords(
  *
  * Only the names, not their content: what the address *is* changes without
  * anybody deploying, so these records are maintained by the board rather than
- * declared here. This is the list it is given.
+ * declared here. This is the list it is given, on the proxy's host only, for
+ * the reason `publicRecords` gives.
  */
 export function wanRecords(
   catalog: Catalog,
   network: Network,
   publicHosts: readonly string[],
 ): readonly string[] {
+  if (catalog.proxy === undefined) return [];
   const opted = new Set([
     ...catalog.services.filter((spec) => spec.publicDns === true).map((spec) => spec.name),
     ...catalog.remotes.filter((remote) => remote.publicDns === true).map((remote) => remote.name),
@@ -1103,11 +1144,13 @@ export function runSetup(
   spec: ServiceSpec,
   installation: Installation,
   catalog: Catalog,
+  fleet: Catalog = catalog,
 ): ServiceSetup | undefined {
   return spec.setup?.({
     self: spec,
     installation,
     catalog,
+    fleet,
     origin: (other = spec) => serviceOrigin(other, installation.network.domain),
   });
 }
@@ -1142,11 +1185,13 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
   const named = (entries: readonly { name: string }[]): string =>
     entries.map((entry) => entry.name).join(", ");
 
+  // The gate is a middleware the route names, so without a proxy there is no
+  // route to name it and nothing to fail closed.
   const gated = [
     ...catalog.services.filter((spec) => spec.auth === "edge"),
     ...catalog.remotes.filter((remote) => remote.auth === "edge"),
   ];
-  if (catalog.gate === undefined && gated.length > 0) {
+  if (catalog.proxy !== undefined && catalog.gate === undefined && gated.length > 0) {
     errors.push(
       "no deployed entry claims the gate role, and these route through the edge gate: " +
         `${named(gated)} — each route would name a middleware nothing defines, and a router ` +

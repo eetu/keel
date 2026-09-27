@@ -18,6 +18,7 @@ import { EXAMPLE_SERVICES, SERVICES } from "../src/config/services";
 import {
   catalogOf,
   deploymentGaps,
+  fleetCatalog,
   type Ingress,
   isSecretsPath,
   metricsSecretsPath,
@@ -904,5 +905,51 @@ describe("which host routes the remotes", () => {
     const board = EXAMPLE_SERVICES.filter((spec) => spec !== proxy);
     expect(remotesRoutedBy(board, [remote])).toEqual([]);
     expect(remotesRoutedBy([], [remote])).toEqual([]);
+  });
+});
+
+describe("a second resolver", () => {
+  const pihole = EXAMPLE_SERVICES.find((spec) => spec.name === "pihole")!;
+  const everything = EXAMPLE_SERVICES.map((spec) => spec.name);
+  const fleetOf = (hosts: Record<string, readonly string[]>) =>
+    fleetCatalog(
+      {
+        ...INSTALLATION,
+        hosts: Object.fromEntries(
+          Object.entries(hosts).map(([name, services]) => [name, { ramMb: 1024, services }]),
+        ),
+      },
+      EXAMPLE_SERVICES,
+      [],
+    );
+  const hostsFile = (catalog: ReturnType<typeof catalogOf>, fleet: ReturnType<typeof catalogOf>) =>
+    runSetup(pihole, INSTALLATION, catalog, fleet)!.files!.find((f) => f.name === "hosts")!.content;
+
+  it("resolves into the catalog of the one host that runs the proxy", () => {
+    const fleet = fleetOf({ edge: everything, spare: ["pihole"] })!;
+    expect(fleet.services.map((spec) => spec.name)).toEqual(everything);
+    expect(fleetOf({ spare: ["pihole"] })).toBeUndefined();
+    expect(fleetOf({ a: everything, b: everything })).toBeUndefined();
+  });
+
+  it("answers for the same names as the first", () => {
+    // A board running only the resolver has no vhost of its own, so from its
+    // own catalog it would write a hosts file naming nothing the house uses.
+    const edge = catalogOf(EXAMPLE_SERVICES);
+    const spare = catalogOf([pihole]);
+    expect(hostsFile(spare, edge)).toEqual(hostsFile(edge, edge));
+    expect(hostsFile(spare, edge)).toContain(`${INSTALLATION.network.lanAddress} `);
+  });
+
+  it("needs no gate, since no route names one", () => {
+    // auth: "edge" is a middleware on the proxy's route. A board with no proxy
+    // writes no route, so there is nothing to fail closed.
+    expect(pihole.auth).toBe("edge");
+    expect(deploymentGaps(catalogOf([pihole])).errors).toEqual([]);
+  });
+
+  it("declares no public record, which the proxy host already owns", () => {
+    expect(pihole.publicDns).toBe(true);
+    expect(publicRecords(catalogOf([pihole]), INSTALLATION.network)).toEqual([]);
   });
 });
