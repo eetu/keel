@@ -984,6 +984,30 @@ export function fleetCatalog(
     : catalogOf(hostServices(installation.hosts[name]!, specs), remotes);
 }
 
+/**
+ * The `backup: true` entries on `hostName` whose state no snapshot holds: the
+ * board takes no backups, and no board that does runs them too. A replica is
+ * covered by the copy on a backed-up board, which is why the second resolver
+ * does not count; a service moved onto a board without backups does, and
+ * without this it would drop out of the snapshot set with nothing saying so.
+ */
+export function unbackedServices(
+  installation: Installation,
+  specs: readonly ServiceSpec[],
+  hostName: string,
+): readonly string[] {
+  const host = installation.hosts[hostName]!;
+  if (host.backup === true) return [];
+  const covered = new Set(
+    Object.values(installation.hosts)
+      .filter((other) => other.backup === true)
+      .flatMap((other) => hostServices(other, specs).map((spec) => spec.name)),
+  );
+  return hostServices(host, specs)
+    .filter((spec) => spec.backup === true && !covered.has(spec.name))
+    .map((spec) => spec.name);
+}
+
 /** The one host that runs the proxy, by name; undefined for none or several. */
 export function proxyHostName(
   installation: Installation,

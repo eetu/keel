@@ -43,6 +43,7 @@ import {
   secretFields,
   secretsPath,
   serviceOrigin,
+  unbackedServices,
   wanRecords,
 } from "../config/spec";
 import { ALERT_CONFIG_PATH, renderAlertConfig } from "../render/alert";
@@ -744,6 +745,13 @@ new PacketFilter(
  * that covered less than the host holds because its list was narrowed for a
  * while would be a backup nobody would notice was thin.
  */
+const unbacked = unbackedServices(INSTALLATION, SERVICES, hostName);
+if (unbacked.length > 0) {
+  pulumi.log.warn(
+    `${hostName} keeps state for ${unbacked.join(", ")} and takes no backups — set backup: true ` +
+      "on the host, or that state is in no snapshot",
+  );
+}
 if (host.backup === true) {
   if (ageRecipient === undefined) {
     throw new Error(

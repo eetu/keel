@@ -35,6 +35,7 @@ import {
   secretsPath,
   type ServiceSpec,
   subdomainOf,
+  unbackedServices,
   vhosts,
 } from "../src/config/spec";
 import { type ServiceSecretFile } from "../src/config/types";
@@ -1039,5 +1040,23 @@ describe("a service on a board without the proxy", () => {
   it("stops by name when its board states no address", () => {
     const { installation: i, specs } = installation({ services: ["vaultwarden"] });
     expect(() => placedRemotes(i, specs)).toThrow(/spare runs vaultwarden.*no address/);
+  });
+
+  it("names the state a move takes out of every snapshot", () => {
+    // vaultwarden keeps state; on a board without backups it would drop out of
+    // the snapshot set silently. pihole on that board is a replica of a copy
+    // the backed-up board still holds, so it is covered.
+    const hosts = (spare: Record<string, unknown>) => ({
+      ...INSTALLATION,
+      hosts: {
+        edge: { ramMb: 1024, services: [...rest, "pihole"], backup: true },
+        spare: { ramMb: 1024, address: "192.0.2.10", ...spare },
+      },
+    });
+    expect(vault.backup).toBe(true);
+    const moved = hosts({ services: ["vaultwarden", "pihole"] });
+    expect(unbackedServices(moved, EXAMPLE_SERVICES, "spare")).toEqual(["vaultwarden"]);
+    const backed = hosts({ services: ["vaultwarden", "pihole"], backup: true });
+    expect(unbackedServices(backed, EXAMPLE_SERVICES, "spare")).toEqual([]);
   });
 });
