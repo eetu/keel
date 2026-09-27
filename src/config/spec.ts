@@ -850,6 +850,13 @@ export type ServiceSpec = {
    * shell and is what a distroless image wants.
    */
   healthCmd?: string;
+  /**
+   * A command inside the container that makes the service re-read what it has
+   * already loaded, written as quadlet's `ReloadCmd=`. A `setup` file marked
+   * `restarts: false` reloads the unit with it when the file changes: the
+   * service re-reads the file by itself, but not everything it derived from it.
+   */
+  reloadCmd?: string;
   /** Include `/var/lib/<name>` in the restic snapshot set. */
   backup?: boolean;
   /**

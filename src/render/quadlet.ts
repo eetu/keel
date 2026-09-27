@@ -291,6 +291,7 @@ export function renderQuadlet(
           "Notify=healthy",
         ]
       : []),
+    ...(spec.reloadCmd ? [`ReloadCmd=${spec.reloadCmd}`] : []),
   ];
 
   // podman refuses a bind mount whose host directory does not exist, and a

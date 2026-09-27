@@ -47,7 +47,8 @@ export type ServiceFile = {
   mode?: string;
   /**
    * Whether changing it restarts the service. False for configuration the
-   * service watches and re-reads by itself.
+   * service watches and re-reads by itself, which reloads the unit instead
+   * when the entry states a `reloadCmd`.
    */
   restarts?: boolean;
 };
