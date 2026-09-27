@@ -11,6 +11,11 @@ import {
   metricsAccountProvider,
 } from "../src/infra/providers/metricsAccount";
 import { type PacketFilterInputs, packetFilterProvider } from "../src/infra/providers/packetFilter";
+import {
+  type PiholeListsInputs,
+  piholeListsProvider,
+  wanted,
+} from "../src/infra/providers/piholeLists";
 import { assertWritablePath } from "../src/infra/providers/remoteFile";
 import { assertCiphertext } from "../src/infra/providers/secretFile";
 import { type SystemdUnitInputs, systemdUnitProvider } from "../src/infra/providers/systemdUnit";
@@ -418,5 +423,33 @@ describe("retiring an account on a hub that is going too", () => {
     await withRemote("403 Forbidden", async () => {
       await expect(metricsAccountProvider.delete!("abc123", account)).rejects.toThrow(/403/);
     });
+  });
+});
+
+describe("a Pi-hole whose lists the deploy owns", () => {
+  const block = ["https://b.example/list", "https://a.example/list"];
+  const inputs: PiholeListsInputs = { host: "nowhere", api: "http://127.0.0.1:8080/api", block };
+  const olds = (held: readonly string[]) => ({ ...inputs, held });
+
+  it("reads back the declared set as sorted type-and-address keys", () => {
+    // A block list and an allow list can share one URL, so the key is both.
+    expect(wanted([...block, block[0]!])).toEqual([
+      "block https://a.example/list",
+      "block https://b.example/list",
+    ]);
+  });
+
+  it("is unchanged when the API holds exactly the declared set", async () => {
+    const diff = await piholeListsProvider.diff!("id", olds(wanted(block)), inputs);
+    expect(diff.changes).toBe(false);
+  });
+
+  it("calls a list added or removed in the web UI drift", async () => {
+    // What `read` found is compared with what the entry declares, so the next
+    // deploy puts the set back instead of adopting the change made there.
+    const added = [...wanted(block), "block https://ui.example/extra"].sort();
+    const removed = wanted(block).slice(1);
+    expect((await piholeListsProvider.diff!("id", olds(added), inputs)).changes).toBe(true);
+    expect((await piholeListsProvider.diff!("id", olds(removed), inputs)).changes).toBe(true);
   });
 });

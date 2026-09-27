@@ -49,6 +49,7 @@ import {
   timerPath,
 } from "../render/quadlet";
 import { MetricsAccount } from "./providers/metricsAccount";
+import { PiholeLists } from "./providers/piholeLists";
 import { RemoteFile } from "./providers/remoteFile";
 import { SealedText } from "./providers/sealedText";
 import { SecretFile } from "./providers/secretFile";
@@ -501,6 +502,20 @@ export default class Service extends pulumi.ComponentResource {
       },
       { ...parent, dependsOn: [...deps, ...loaded] },
     );
+
+    // Behind the unit, because the lists are changed by calling the service.
+    if (spec.adlists !== undefined) {
+      new PiholeLists(
+        `${spec.name}-adlists`,
+        {
+          host,
+          sshArgs,
+          api: `http://127.0.0.1:${spec.port}${spec.adlists.api}`,
+          block: spec.adlists.block,
+        },
+        { ...parent, dependsOn: [this.unit] },
+      );
+    }
 
     // The same function the backup's own path list is derived from, so the two
     // cannot disagree about where a service keeps its state.

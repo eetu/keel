@@ -104,10 +104,20 @@ describe("the example catalog names nobody's installation", () => {
   it.each(EXAMPLE_SERVICES)("$name dials no machine but the one it runs on", (spec) => {
     // Every URL pointing at the outside is composed in `setup` from the
     // installation's own domain, so what is left in the declaration is one
-    // process talking to another on the same host — which is loopback.
-    for (const [, authority] of declared(spec).matchAll(/\bhttps?:\/\/([^/"\\\s]*)/gi)) {
+    // process talking to another on the same host — which is loopback. A
+    // blocklist is the exception: public content the service downloads, the
+    // same for every clone, and no endpoint of anybody's installation — the
+    // test above still holds it to naming nothing from one.
+    for (const [, authority] of declared({ ...spec, adlists: undefined }).matchAll(
+      /\bhttps?:\/\/([^/"\\\s]*)/gi,
+    )) {
       const host = authority.replace(/:\d+$/, "");
       expect(["127.0.0.1", "localhost", "[::1]"], `${spec.name}: ${authority}`).toContain(host);
+    }
+    for (const list of spec.adlists?.block ?? []) {
+      expect(list, `${spec.name}: a list fetched in the clear can be swapped in transit`).toMatch(
+        /^https:\/\//,
+      );
     }
   });
 
