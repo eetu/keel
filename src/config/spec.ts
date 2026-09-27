@@ -1342,7 +1342,10 @@ export function certSyncName(spec: ServiceSpec): string | null {
  *
  * Pure, so each precondition is a test rather than something a deploy discovers.
  */
-export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: string[] } {
+export function deploymentGaps(
+  catalog: Catalog,
+  fleet: Catalog = catalog,
+): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   const named = (entries: readonly { name: string }[]): string =>
@@ -1522,8 +1525,10 @@ export function deploymentGaps(catalog: Catalog): { errors: string[]; warnings: 
     );
   }
 
+  // The issuer may run on another board: a client reaches it through its vhost,
+  // so what matters is that one exists in the fleet, not on this board.
   const clients = catalog.services.filter((spec) => spec.auth === "oidc");
-  if (catalog.identity === undefined && clients.length > 0) {
+  if ((catalog.identity ?? fleet.identity) === undefined && clients.length > 0) {
     errors.push(
       "no deployed entry claims the identity role, and these run an OIDC client of their " +
         `own: ${named(clients)} — there is no issuer for them to ask`,
