@@ -33,6 +33,7 @@ import {
   deployedAccountEmail,
   deploymentGaps,
   fleetCatalog,
+  isRouted,
   orderServices,
   placedRemotes,
   publicRecords,
@@ -353,6 +354,7 @@ const routesTheMesh = mine.some(
 const forwardRules = renderNftForward(
   mine.some((spec) => (spec.egress ?? "internal") === "open"),
   routesTheMesh ? MESH_INTERFACE : undefined,
+  mine.some((spec) => isRouted(spec) && (spec.egress ?? "internal") !== "host"),
 );
 const forwardFile = new RemoteFile("nft-forward-open", {
   host: sshTarget,
