@@ -685,8 +685,9 @@ trusts the identity header the proxy sets, so one the whole LAN could dial
 directly would take the header from anyone. A setup reads `isRouted(self)` for
 what only the application can say — a bind on the LAN, and a header allowlist
 naming `network.lanAddress` rather than loopback or the bridge gateway. A
-service the proxy's board also runs is a replica and is not routed (the second
-resolver). The rule and sets are the image's, and `PacketFilter` refuses a
+service the proxy's board also runs is a replica, routed under its board's name
+(`pihole-raspo` on `pihole-raspo.<domain>`), so its UI is a bookmark rather
+than an ssh tunnel. The rule and sets are the image's, and `PacketFilter` refuses a
 routed port on a board whose booted image predates them — so the image lands
 before the first move.
 

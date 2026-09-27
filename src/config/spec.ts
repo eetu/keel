@@ -1007,10 +1007,13 @@ type Routed = { host: string; spec: ServiceSpec; remote: RemoteSpec };
  * its own board it is published on the LAN and admitted from the proxy's
  * address only.
  *
- * A service the proxy's host also runs is served there and is not routed: the
- * second copy is a replica, the way a second resolver is. A service with
- * several routers or socket activation is refused rather than half-routed —
- * neither has a shape a single upstream carries yet.
+ * A service the proxy's host also runs keeps its name there, and the copy on
+ * another board is a replica — the second resolver — routed under that board's
+ * name: `pihole-raspo` on `pihole-raspo.<domain>`, behind the same gate. So a
+ * replica's UI is a bookmark on any device rather than an ssh tunnel, and the
+ * remote gives it a check of its own. A service with several routers or socket
+ * activation is refused rather than half-routed — neither has a shape a single
+ * upstream carries yet.
  */
 function routed(installation: Installation, specs: readonly ServiceSpec[]): readonly Routed[] {
   const proxyName = proxyHostName(installation, specs);
@@ -1021,7 +1024,8 @@ function routed(installation: Installation, specs: readonly ServiceSpec[]): read
     if (name === proxyName) continue;
     for (const spec of hostServices(host, specs)) {
       const subdomain = subdomainOf(spec);
-      if (subdomain === null || served.has(spec.name)) continue;
+      if (subdomain === null) continue;
+      const replica = served.has(spec.name);
       if (host.address === undefined) {
         throw new Error(
           `${name} runs ${spec.name}, which the proxy on ${proxyName} routes to, and states no ` +
@@ -1042,9 +1046,9 @@ function routed(installation: Installation, specs: readonly ServiceSpec[]): read
         host: name,
         spec,
         remote: {
-          name: spec.name,
-          description: spec.description,
-          subdomain,
+          name: replica ? `${spec.name}-${name}` : spec.name,
+          description: replica ? `${spec.description} (the copy on ${name})` : spec.description,
+          subdomain: replica ? `${subdomain}-${name}` : subdomain,
           upstream: `http://${host.address}:${spec.port}`,
           // oidc and open render the same route — no gate, the app runs its own
           // login — and a remote cannot carry oidc.

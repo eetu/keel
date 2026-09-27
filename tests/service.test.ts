@@ -19,6 +19,7 @@ import {
   catalogOf,
   deploymentGaps,
   fleetCatalog,
+  hostServices,
   type Ingress,
   isRouted,
   isSecretsPath,
@@ -1001,14 +1002,31 @@ describe("a service on a board without the proxy", () => {
     expect(routedServices(i, specs, "edge").some(isRouted)).toBe(false);
   });
 
-  it("is not routed when the proxy's board runs it too", () => {
-    // The second copy is a replica, the way a second resolver is.
+  it("is routed under its board's name when the proxy's board runs it too", () => {
+    // The second copy is a replica — the second resolver — and the name on the
+    // proxy's board stays the first copy's, so the two never share a route.
+    const pihole = EXAMPLE_SERVICES.find((spec) => spec.name === "pihole")!;
     const { installation: i, specs } = installation({
       services: ["pihole"],
       address: "192.0.2.10",
     });
-    expect(placedRemotes(i, specs)).toEqual([]);
-    expect(routedServices(i, specs, "spare").some(isRouted)).toBe(false);
+    expect(placedRemotes(i, specs)).toEqual([
+      expect.objectContaining({
+        name: "pihole-spare",
+        subdomain: `${subdomainOf(pihole)}-spare`,
+        upstream: `http://192.0.2.10:${pihole.port}`,
+        auth: pihole.auth,
+      }),
+    ]);
+    expect(routedServices(i, specs, "spare").find(isRouted)?.ingress?.proxyTcp).toEqual([
+      pihole.port,
+    ]);
+    // Both halves together pass the proxy board's own gap checks.
+    const edge = catalogOf(
+      hostServices(i.hosts.edge!, specs),
+      remotesRoutedBy(hostServices(i.hosts.edge!, specs), placedRemotes(i, specs)),
+    );
+    expect(deploymentGaps(edge).errors).toEqual([]);
   });
 
   it("carries oidc as a route with no gate, which is what oidc renders", () => {
