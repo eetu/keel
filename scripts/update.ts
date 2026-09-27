@@ -163,9 +163,17 @@ for (const line of restarts(new Set(chosen.map((bump) => bump.pin.ref)))) consol
 
 // The pin's tag is part of the golden body, its digest is masked; either way
 // the snapshot is re-taken here rather than failing the next validate.
+// The vendored release by path: under `yarn update`, npm_execpath is a shell
+// shim node cannot run.
+const { packageManager } = JSON.parse(readFileSync(new URL("package.json", repo), "utf8")) as {
+  packageManager: string;
+};
+const yarn = fileURLToPath(
+  new URL(`.yarn/releases/yarn-${packageManager.replace(/^yarn@/, "")}.cjs`, repo),
+);
 const golden = spawnSync(
   process.execPath,
-  [process.env.npm_execpath ?? "yarn", "vitest", "run", "-u", "tests/golden.local.test.ts"],
+  [yarn, "vitest", "run", "-u", "tests/golden.local.test.ts"],
   { cwd: fileURLToPath(repo), stdio: ["ignore", "ignore", "inherit"] },
 );
 console.log(golden.status === 0 ? "local golden re-taken" : "local golden failed — run yarn test");
