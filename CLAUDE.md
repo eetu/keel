@@ -142,9 +142,17 @@ image/build.sh [tag]          # render + podman build --arch arm64 (default keel
 image/test.sh [tag]           # tier 2: bootc lint, unit syntax, generator profiles
 image/card.sh <host>          # build, shrink, add the Pi firmware and keel.conf, boot-test
 yarn preview -s <host>        # pulumi preview --refresh, vault- and .env-loaded
+yarn preview:fast -s <host>   # the same without --refresh: reads nothing on the board
 yarn deploy -s <host>         # pulumi up --refresh, vault- and .env-loaded
+yarn deploy:fast -s <host>    # the same without --refresh: touches only what changed
 yarn bootstrap -s <host>      # the same, for a board whose coordinator is down
 ```
+
+The `:fast` pair skips the refresh, so it is for a change made in this
+repository and nothing else. What only a refresh sees — a secret rotated in the
+vault, a rolling tag that moved, a hand edit on the board, the first deploy
+after a rebuild — needs the plain `deploy`. Any of them takes `--yes` to run
+unattended.
 
 The last two go through `scripts/pulumi.ts`, which warms the 1Password session,
 reads the Cloudflare token into `CLOUDFLARE_API_TOKEN` and loads `.env` before it
