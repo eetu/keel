@@ -359,6 +359,18 @@ exports[`'traefik' > renders the same static file 1`] = `
 log:
   level: INFO
 
+accessLog:
+  format: json
+  fields:
+    names:
+      ClientUsername: drop
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+    queryParameters:
+      defaultMode: drop
+
 ping:
   entryPoint: ping
 
@@ -369,6 +381,9 @@ entryPoints:
       aliasHeadersStrategy: delete
   websecure:
     address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: 1h
     http:
       aliasHeadersStrategy: delete
       tls:
