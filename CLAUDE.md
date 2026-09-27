@@ -143,7 +143,7 @@ image/test.sh [tag]           # tier 2: bootc lint, unit syntax, generator profi
 image/card.sh <host>          # build, shrink, add the Pi firmware and keel.conf, boot-test
 yarn preview -s <host>        # pulumi preview --refresh, vault- and .env-loaded
 yarn preview:fast -s <host>   # the same without --refresh: reads nothing on the board
-yarn deploy -s <host>         # pulumi up --refresh, vault- and .env-loaded
+yarn deploy -s <host>         # one refresh, then pulumi up; vault- and .env-loaded
 yarn deploy:fast -s <host>    # the same without --refresh: touches only what changed
 yarn bootstrap -s <host>      # the same, for a board whose coordinator is down
 ```
