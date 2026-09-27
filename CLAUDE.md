@@ -671,6 +671,15 @@ records and deletes the dynamic ones afterwards, since Pulumi runs deletions
 last, so each name carries two identical A records for the length of one run
 and ends with one.
 
+**The rest of the zone is `Installation.records`.** A mail provider's MX, SPF,
+DKIM and DMARC and a domain verification derive from no entry, so they are
+listed on the installation and declared by the proxy's stack beside its A
+records. A record's resource name carries a hash of its content, because two
+TXT records on the apex differ only there, and so a changed value is a new
+record created before the old one is deleted. Records that already exist are
+adopted with `pulumi import`, not recreated: Cloudflare refuses an identical
+second record.
+
 **A route to another machine is an entry of its own shape.** A `RemoteSpec` is
 a vhost whose upstream is not on this board: it gets the route, the LAN record
 and the check, and none of what the board owns — no image, no unit, no cap, no

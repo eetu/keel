@@ -76,6 +76,7 @@ import { SealedEnv } from "./providers/sealedEnv";
 import { SecretFile } from "./providers/secretFile";
 import { SystemdUnit } from "./providers/systemdUnit";
 import Service from "./service";
+import { zoneRecordKey, zoneRecordName } from "./zoneRecords";
 
 const config = new pulumi.Config();
 
@@ -635,7 +636,9 @@ for (const remote of catalog.remotes) {
  */
 const publicNames = publicRecords(catalog, INSTALLATION.network, INSTALLATION.publicHosts);
 const wanNames = wanRecords(catalog, INSTALLATION.network, INSTALLATION.publicHosts);
-if (publicNames.length > 0 || wanNames.length > 0) {
+// The zone's other records go with its A records, on the proxy's stack alone.
+const zoneRecords = catalog.proxy === undefined ? [] : (INSTALLATION.records ?? []);
+if (publicNames.length > 0 || wanNames.length > 0 || zoneRecords.length > 0) {
   const { zoneId } = cloudflare.getZoneOutput({
     filter: { name: INSTALLATION.network.domain },
   });
@@ -645,6 +648,19 @@ if (publicNames.length > 0 || wanNames.length > 0) {
       name: record.fqdn,
       type: "A",
       content: record.content,
+      ttl: 120,
+      proxied: false,
+      comment: "keel",
+    });
+  }
+
+  for (const record of zoneRecords) {
+    new cloudflare.DnsRecord(zoneRecordKey(record), {
+      zoneId,
+      name: zoneRecordName(record, INSTALLATION.network.domain),
+      type: record.type,
+      content: record.content,
+      ...(record.priority === undefined ? {} : { priority: record.priority }),
       ttl: 120,
       proxied: false,
       comment: "keel",

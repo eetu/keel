@@ -263,6 +263,17 @@ export type SmtpRelay = {
  * a shared type; twenty such services would be twenty fields every other
  * installation has to fill in and no clone can use.
  */
+/** One record in the installation's zone. */
+export type ZoneRecord = {
+  type: "MX" | "TXT" | "CNAME" | "CAA" | "SRV";
+  /** Relative to the zone: `@` for the apex, `_dmarc`, `protonmail._domainkey`. */
+  name: string;
+  /** As Cloudflare stores it, so a TXT value keeps its quotes. */
+  content: string;
+  /** MX and SRV only. */
+  priority?: number;
+};
+
 export type Installation = {
   /**
    * The 1Password vault every secret field is read out of. The item and field
@@ -283,6 +294,13 @@ export type Installation = {
    * expose it, and there is almost never a reason to.
    */
   publicHosts: readonly string[];
+  /**
+   * Records the zone carries that no entry derives: a mail provider's MX, SPF,
+   * DKIM and DMARC, a domain verification. Declared by the proxy's stack, the
+   * one that owns the zone's other records, so a hand edit in the dashboard is
+   * drift on a refresh.
+   */
+  records?: readonly ZoneRecord[];
   /**
    * Where a failure is posted: the image's five-minute poller, and the status
    * page's own checks, both send here.
