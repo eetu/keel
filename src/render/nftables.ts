@@ -43,6 +43,13 @@ function ruleset(): Tree {
           set world_tcp { type inet_service; }
           set world_udp { type inet_service; }
 
+          # A service this board runs and another board's proxy routes to. Its
+          # port answers the proxy's address and nothing else: an app behind the
+          # edge gate trusts the identity header the proxy sets, and one the whole
+          # LAN could dial directly would be one any client could set it on.
+          set proxy4 { type ipv4_addr; }
+          set proxy_tcp { type inet_service; }
+
           chain input {
               type filter hook input priority filter; policy drop;
 
@@ -80,6 +87,7 @@ function ruleset(): Tree {
               ip saddr @mesh4 udp dport @mesh_udp accept
               ip6 saddr @mesh6 tcp dport @mesh_tcp accept
               ip6 saddr @mesh6 udp dport @mesh_udp accept
+              ip saddr @proxy4 tcp dport @proxy_tcp accept
 
               tcp dport @world_tcp accept
               udp dport @world_udp accept

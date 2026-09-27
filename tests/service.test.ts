@@ -20,17 +20,21 @@ import {
   deploymentGaps,
   fleetCatalog,
   type Ingress,
+  isRouted,
   isSecretsPath,
   metricsSecretsPath,
+  placedRemotes,
   publicRecords,
   type RemoteSpec,
   remotesRoutedBy,
+  routedServices,
   runSetup,
   secretFields,
   secretFileShape,
   secretsPath,
   type ServiceSpec,
   subdomainOf,
+  vhosts,
 } from "../src/config/spec";
 import { type ServiceSecretFile } from "../src/config/types";
 import { publicProxyIngress } from "../src/render/nftPorts";
@@ -951,5 +955,71 @@ describe("a second resolver", () => {
   it("declares no public record, which the proxy host already owns", () => {
     expect(pihole.publicDns).toBe(true);
     expect(publicRecords(catalogOf([pihole]), INSTALLATION.network)).toEqual([]);
+  });
+});
+
+describe("a service on a board without the proxy", () => {
+  const vault = EXAMPLE_SERVICES.find((spec) => spec.name === "vaultwarden")!;
+  const rest = EXAMPLE_SERVICES.filter((spec) => spec !== vault).map((spec) => spec.name);
+  const installation = (spare: Record<string, unknown>, specs = EXAMPLE_SERVICES) => ({
+    installation: {
+      ...INSTALLATION,
+      hosts: { edge: { ramMb: 1024, services: rest }, spare: { ramMb: 1024, ...spare } },
+    },
+    specs,
+  });
+
+  it("is a remote on the proxy's board, dialled at its own board's address", () => {
+    const { installation: i, specs } = installation({
+      services: ["vaultwarden"],
+      address: "192.0.2.10",
+    });
+    const [remote] = placedRemotes(i, specs);
+    expect(remote).toMatchObject({
+      name: "vaultwarden",
+      subdomain: subdomainOf(vault),
+      upstream: `http://192.0.2.10:${vault.port}`,
+      auth: vault.auth,
+    });
+    // The remote is what gives it a route, a LAN record and a check there.
+    expect(vhosts(fleetCatalog(i, specs, placedRemotes(i, specs))!).map((v) => v.name)).toContain(
+      "vaultwarden",
+    );
+  });
+
+  it("is published on the LAN and admitted from the proxy alone, on its own board", () => {
+    const { installation: i, specs } = installation({
+      services: ["vaultwarden"],
+      address: "192.0.2.10",
+    });
+    const [here] = routedServices(i, specs, "spare");
+    expect(isRouted(here!)).toBe(true);
+    expect(here!.ingress?.proxyTcp).toEqual([vault.port]);
+    expect(here!.ingress?.lanTcp ?? []).not.toContain(vault.port);
+    expect(renderQuadlet(here!)).toContain(`PublishPort=0.0.0.0:${vault.port}:${vault.port}`);
+    // Nothing moves on the proxy's own board.
+    expect(routedServices(i, specs, "edge").some(isRouted)).toBe(false);
+  });
+
+  it("is not routed when the proxy's board runs it too", () => {
+    // The second copy is a replica, the way a second resolver is.
+    const { installation: i, specs } = installation({
+      services: ["pihole"],
+      address: "192.0.2.10",
+    });
+    expect(placedRemotes(i, specs)).toEqual([]);
+    expect(routedServices(i, specs, "spare").some(isRouted)).toBe(false);
+  });
+
+  it("carries oidc as a route with no gate, which is what oidc renders", () => {
+    const oidc = { ...vault, auth: "oidc" as const };
+    const specs = EXAMPLE_SERVICES.map((spec) => (spec === vault ? oidc : spec));
+    const { installation: i } = installation({ services: ["vaultwarden"], address: "192.0.2.10" });
+    expect(placedRemotes(i, specs)[0]?.auth).toBe("open");
+  });
+
+  it("stops by name when its board states no address", () => {
+    const { installation: i, specs } = installation({ services: ["vaultwarden"] });
+    expect(() => placedRemotes(i, specs)).toThrow(/spare runs vaultwarden.*no address/);
   });
 });

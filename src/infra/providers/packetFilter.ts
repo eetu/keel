@@ -91,8 +91,14 @@ const applied = async (inputs: PacketFilterInputs): Promise<string | null> => {
           ? (element as { val: unknown }).val
           : element,
       )
-      .filter((element): element is number => typeof element === "number")
-      .sort((a, b) => a - b);
+      // Ports arrive as numbers and the proxy's address as a string; a filter
+      // on numbers alone would read that set as empty and reload every deploy.
+      .filter((element): element is number | string =>
+        ["number", "string"].includes(typeof element),
+      )
+      .sort((a, b) =>
+        typeof a === "number" && typeof b === "number" ? a - b : String(a) < String(b) ? -1 : 1,
+      );
     found.set(set.name, ports.join(", "));
   }
   // Keyed off the input's own set names, so the answer is about the sets this
@@ -118,6 +124,25 @@ const applied = async (inputs: PacketFilterInputs): Promise<string | null> => {
  */
 const reload = async (inputs: PacketFilterInputs): Promise<void> => {
   await runOk(inputs.host, ["systemctl", "reload", "nftables.service"], undefined, inputs.sshArgs);
+  // The rule that reads `proxy_tcp` is the image's, and the drop-in's set
+  // declaration creates the set whether or not a rule reads it. So a board
+  // booting an image from before that rule takes the port, admits nothing on
+  // it, and reports success, while the proxy on the other board answers 502.
+  // Asked here, where it is a sentence instead.
+  if (/^proxy_tcp=\S/m.test(inputs.sets)) {
+    const chain = await runOk(
+      inputs.host,
+      ["nft", "list", "chain", ...TABLE, "input"],
+      undefined,
+      inputs.sshArgs,
+    );
+    if (!chain.includes("@proxy_tcp")) {
+      throw new Error(
+        `${inputs.host} runs a service another board's proxy routes to, and its booted image has ` +
+          "no rule admitting @proxy_tcp — upgrade the board's image before deploying it",
+      );
+    }
+  }
 };
 
 const provider: pulumi.dynamic.ResourceProvider<PacketFilterInputs, Outs> = {

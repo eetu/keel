@@ -46,6 +46,7 @@ const SETS: readonly (readonly [keyof Ingress, string])[] = [
   ["meshUdp", "mesh_udp"],
   ["worldTcp", "world_tcp"],
   ["worldUdp", "world_udp"],
+  ["proxyTcp", "proxy_tcp"],
 ];
 
 /** Sorted and deduplicated, so writing the same ports twice is not a diff. */
@@ -147,21 +148,45 @@ export function publicProxyIngress(
  * numerically — the same canonical form the provider builds out of `nft -j`, so
  * the comparison is string equality and any difference is a reload.
  */
-export function nftSetElements(specs: readonly ServiceSpec[]): string {
+export function nftSetElements(specs: readonly ServiceSpec[], proxyAddress = ""): string {
   const union = new Map<string, number[]>(SETS.map(([, set]) => [set, []]));
   for (const spec of specs) {
     for (const [key, set] of SETS) {
       union.get(set)!.push(...(spec.ingress?.[key] ?? []));
     }
   }
-  return SETS.map(([, set]) => `${set}=${elements(union.get(set)!)}`).join("\n");
+  const routed = union.get("proxy_tcp")!.length > 0;
+  return [
+    ...SETS.map(([, set]) => `${set}=${elements(union.get(set)!)}`),
+    `proxy4=${routed ? proxyAddress : ""}`,
+  ].join("\n");
 }
 
-export function renderNftServices(specs: readonly ServiceSpec[]): string {
-  const blocks = [...specs]
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    .map(renderNftPorts)
-    .filter((rules) => rules !== null);
+/**
+ * The address `proxy_tcp` answers, written only where a routed service needs
+ * it: a board with none keeps the file it had, and so does its reload trigger.
+ */
+function proxyAddressBlock(specs: readonly ServiceSpec[], proxyAddress: string): string | null {
+  if (!specs.some((spec) => (spec.ingress?.proxyTcp?.length ?? 0) > 0)) return null;
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(proxyAddress)) {
+    throw new Error(`not an IPv4 address: ${proxyAddress}`);
+  }
+  return [
+    "# the proxy on another board",
+    "table inet keel {",
+    `    set proxy4 { type ipv4_addr; elements = { ${proxyAddress} } }`,
+    "}",
+    "",
+  ].join("\n");
+}
+
+export function renderNftServices(specs: readonly ServiceSpec[], proxyAddress = ""): string {
+  const blocks = [
+    ...[...specs]
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      .map(renderNftPorts),
+    proxyAddressBlock(specs, proxyAddress),
+  ].filter((rules) => rules !== null);
   return blocks.length === 0
     ? "# Nothing in the deployed set answers the network itself.\n"
     : blocks.join("");

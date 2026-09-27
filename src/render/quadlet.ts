@@ -68,6 +68,7 @@ export function publishAddress(spec: ServiceSpec): string {
     ...(spec.ingress?.lanTcp ?? []),
     ...(spec.ingress?.meshTcp ?? []),
     ...(spec.ingress?.worldTcp ?? []),
+    ...(spec.ingress?.proxyTcp ?? []),
   ];
   return admitted.includes(spec.port) ? "0.0.0.0" : "127.0.0.1";
 }
