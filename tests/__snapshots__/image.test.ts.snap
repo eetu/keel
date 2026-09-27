@@ -522,8 +522,10 @@ PRESSURE_STATE = os.path.join(
 JOURNAL_LINES = 12
 # podman runs each health check as a transient unit named after the
 # container id; one that fails is a check that failed, which the service's
-# own state already reflects.
-TRANSIENT = re.compile(r"^[0-9a-f]{64}-[0-9a-f]+\\.service$")
+# own state already reflects. A startup check's unit carries "startup-"
+# before its hash, and a pattern of hex alone let every one of them through
+# as a phone alert for a single missed check.
+TRANSIENT = re.compile(r"^[0-9a-f]{64}-(?:startup-)?[0-9a-f]+\\.service$")
 
 
 def sink():

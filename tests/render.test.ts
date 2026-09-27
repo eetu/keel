@@ -8,6 +8,7 @@
  * exists, which a snapshot diff cannot.
  */
 
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +20,7 @@ import { SERVICES } from "../src/config/services";
 import { SECRETS_DIR } from "../src/config/spec";
 import { MASKED_UNITS, REQUIRED_UNITS } from "../src/config/versions";
 import { renderAll } from "../src/render";
+import { ALERT_SCRIPT_PATH } from "../src/render/alert";
 import {
   KEEL_MESH_SERVICE,
   MESH_AGENT_BINARY,
@@ -425,5 +427,33 @@ describe("the resolver the image carries", () => {
     expect(unit).not.toContain("ConditionPathExists");
     expect(unit).toContain("ConditionSecurity=selinux");
     expect(unit).toContain("Before=unbound.service");
+  });
+});
+
+describe("the alert poller", () => {
+  it("never pages for a single podman health check, startup checks included", () => {
+    // The pattern is run by Python on the board, so it is tested by Python
+    // rather than re-read as a JavaScript regex that might agree with it. The
+    // names are two real ones from the journal: a check, and a startup check.
+    const source = content(ALERT_SCRIPT_PATH);
+    const pattern = /^TRANSIENT = (re\.compile\(.*\))$/m.exec(source)?.[1];
+    expect(pattern).toBeDefined();
+    const id = "1d7b5ecdb2f718272ca32820159fb8be686ba205fbb913a74909a31bbbd9764e";
+    const verdicts = execFileSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import re, sys",
+          `TRANSIENT = ${pattern}`,
+          "for name in sys.argv[1:]: print(bool(TRANSIENT.match(name)))",
+        ].join("\n"),
+        `${id}-7074f640fb087f1a.service`,
+        `${id}-startup-7074f640fb087f1a.service`,
+        "scribe-shim.service",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(verdicts.trim().split("\n")).toEqual(["True", "True", "False"]);
   });
 });
