@@ -72,8 +72,11 @@ export function oidcClientEnv(
   context: SetupContext,
   options: OidcClientOptions = {},
 ): Record<string, string> {
-  const { self, catalog, origin } = context;
-  const identity = catalog.identity;
+  const { self, catalog, fleet, origin } = context;
+  // The issuer is wherever the identity provider runs, which on a board other
+  // than its own is the proxy's board: the client reaches it through its vhost
+  // either way.
+  const identity = catalog.identity ?? fleet.identity;
   if (identity === undefined) {
     throw new Error(
       `${self.name} runs an OIDC client of its own, and no deployed entry claims the ` +

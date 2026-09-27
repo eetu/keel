@@ -33,11 +33,14 @@ import {
   secretFields,
   secretFileShape,
   secretsPath,
+  serviceOrigin,
   type ServiceSpec,
+  type SetupContext,
   subdomainOf,
   unbackedServices,
   vhosts,
 } from "../src/config/spec";
+import { oidcClientEnv } from "../src/config/templates/oidcClient";
 import { type ServiceSecretFile } from "../src/config/types";
 import { publicProxyIngress } from "../src/render/nftPorts";
 import {
@@ -1040,6 +1043,30 @@ describe("a service on a board without the proxy", () => {
   it("stops by name when its board states no address", () => {
     const { installation: i, specs } = installation({ services: ["vaultwarden"] });
     expect(() => placedRemotes(i, specs)).toThrow(/spare runs vaultwarden.*no address/);
+  });
+
+  it("asks the fleet for its issuer when the identity provider runs elsewhere", () => {
+    // An OIDC client on a board without the provider reaches the issuer through
+    // its vhost, so the issuer is the fleet's — and a board with no provider
+    // anywhere still has nobody to ask.
+    const client = { ...vault, auth: "oidc" as const };
+    const alone = catalogOf([client]);
+    const fleet = catalogOf(EXAMPLE_SERVICES);
+    const context: SetupContext = {
+      self: client,
+      installation: INSTALLATION,
+      catalog: alone,
+      fleet,
+      origin: (spec?: ServiceSpec) => serviceOrigin(spec ?? client, INSTALLATION.network.domain),
+    };
+    expect(oidcClientEnv(context).OIDC_ISSUER).toBe(
+      fleet.identity!.role.issuer(
+        serviceOrigin(fleet.identity!.spec, INSTALLATION.network.domain),
+        client.name,
+      ),
+    );
+    expect(deploymentGaps(alone, fleet).errors.join("\n")).not.toMatch(/identity role/);
+    expect(deploymentGaps(alone).errors.join("\n")).toMatch(/identity role/);
   });
 
   it("names the state a move takes out of every snapshot", () => {

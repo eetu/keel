@@ -194,7 +194,7 @@ const fleet = fleetCatalog(INSTALLATION, SERVICES, remotes) ?? catalog;
  * definition for is a router it refuses to build: the vhost fails closed, with
  * the reason in a log nobody is reading. That is the failure this exists for.
  */
-const gaps = deploymentGaps(catalog);
+const gaps = deploymentGaps(catalog, fleet);
 for (const warning of gaps.warnings) pulumi.log.warn(warning);
 if (gaps.errors.length > 0) {
   throw new Error(`${sshTarget}: ${gaps.errors.join("; ")}`);
