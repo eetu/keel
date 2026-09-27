@@ -2,8 +2,10 @@
  * Runs the vendored `pulumi` CLI with the two values the deploy needs in its
  * environment before Pulumi starts evaluating the program.
  *
- *   yarn preview -s <host>    # pulumi preview --refresh --parallel 4
- *   yarn deploy  -s <host>    # pulumi up      --refresh --parallel 4
+ *   yarn preview      -s <host>   # pulumi preview --refresh --parallel 4
+ *   yarn preview:fast -s <host>   # pulumi preview --parallel 4
+ *   yarn deploy       -s <host>   # pulumi up --refresh --parallel 4
+ *   yarn deploy:fast  -s <host>   # pulumi up --parallel 4
  *
  * Neither value may be typed into a committed script. `PULUMI_CONFIG_PASSPHRASE`
  * is one line of the gitignored `.env`, and the Cloudflare API token lives in the

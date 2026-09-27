@@ -22,7 +22,9 @@
     "qemu-test": "image/qemu-test.sh",
     "pulumi": "dotenv -e .env -- pulumi",
     "preview": "node --import tsx scripts/pulumi.ts preview --refresh --parallel 4",
+    "preview:fast": "node --import tsx scripts/pulumi.ts preview --parallel 4",
     "deploy": "node --import tsx scripts/pulumi.ts up --refresh --parallel 4",
+    "deploy:fast": "node --import tsx scripts/pulumi.ts up --parallel 4",
     "bootstrap": "node --import tsx scripts/bootstrap.ts --parallel 4"
   },
   "dependencies": {
