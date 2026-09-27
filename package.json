@@ -25,7 +25,8 @@
     "preview:fast": "node --import tsx scripts/pulumi.ts preview --parallel 4",
     "deploy": "node --import tsx scripts/pulumi.ts up --refresh --parallel 4",
     "deploy:fast": "node --import tsx scripts/pulumi.ts up --parallel 4",
-    "bootstrap": "node --import tsx scripts/bootstrap.ts --parallel 4"
+    "bootstrap": "node --import tsx scripts/bootstrap.ts --parallel 4",
+    "update": "tsx scripts/update.ts"
   },
   "dependencies": {
     "@pulumi/cloudflare": "^6.20.0",
