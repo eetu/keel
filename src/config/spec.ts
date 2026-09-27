@@ -621,6 +621,15 @@ export type SetupContext = {
    * host; on any other, what a reading of the LAN's names wants instead.
    */
   fleet: Catalog;
+  /**
+   * The base URL of the entry claiming `role`, as this entry reaches it:
+   * loopback on its port when that entry runs on this board, its vhost when it
+   * runs on another. The vhost keeps every address out of the catalog, and it
+   * works for a host-networked caller; an internal-bridge caller has no route
+   * off its board, so it can only use the first. Undefined when nothing in the
+   * fleet claims the role.
+   */
+  reach: (role: RoleKey) => string | undefined;
   /** `https://<subdomain>.<domain>` — this entry's own vhost unless told otherwise. */
   origin: (spec?: ServiceSpec) => string;
 };
@@ -898,7 +907,7 @@ export type ServiceSpec = {
 };
 
 /** The role fields, which are the keys `roles()` resolves. */
-type RoleKey = "proxy" | "identity" | "gate" | "metrics";
+export type RoleKey = "proxy" | "identity" | "gate" | "metrics";
 
 /**
  * The entry claiming one role, or undefined when nothing being deployed does.
@@ -1008,15 +1017,41 @@ export function unbackedServices(
     .map((spec) => spec.name);
 }
 
+/**
+ * Every entry some board deploys, once each whichever boards it is on — the set
+ * a role is resolved over when the question is where in the fleet it runs. A
+ * replica is one entry, so it is one claimant.
+ */
+export function fleetServices(
+  installation: Installation,
+  specs: readonly ServiceSpec[],
+): readonly ServiceSpec[] {
+  const deployed = new Set(
+    Object.values(installation.hosts).flatMap((host) =>
+      hostServices(host, specs).map((spec) => spec.name),
+    ),
+  );
+  return specs.filter((spec) => deployed.has(spec.name));
+}
+
+/** The one board whose deployed set claims `role`, by name; undefined for none or several. */
+export function roleHost(
+  installation: Installation,
+  specs: readonly ServiceSpec[],
+  role: RoleKey,
+): string | undefined {
+  const names = Object.entries(installation.hosts)
+    .filter(([, host]) => roles(hostServices(host, specs))[role] !== undefined)
+    .map(([name]) => name);
+  return names.length === 1 ? names[0] : undefined;
+}
+
 /** The one host that runs the proxy, by name; undefined for none or several. */
 export function proxyHostName(
   installation: Installation,
   specs: readonly ServiceSpec[],
 ): string | undefined {
-  const names = Object.entries(installation.hosts)
-    .filter(([, host]) => roles(hostServices(host, specs)).proxy !== undefined)
-    .map(([name]) => name);
-  return names.length === 1 ? names[0] : undefined;
+  return roleHost(installation, specs, "proxy");
 }
 
 type Routed = { host: string; spec: ServiceSpec; remote: RemoteSpec };
@@ -1308,12 +1343,21 @@ export function runSetup(
   installation: Installation,
   catalog: Catalog,
   fleet: Catalog = catalog,
+  everywhere: Roles = catalog,
 ): ServiceSetup | undefined {
   return spec.setup?.({
     self: spec,
     installation,
     catalog,
     fleet,
+    reach: (role) => {
+      const local = catalog[role];
+      if (local !== undefined) return `http://127.0.0.1:${local.spec.port}`;
+      const remote = everywhere[role];
+      return remote === undefined
+        ? undefined
+        : serviceOrigin(remote.spec, installation.network.domain);
+    },
     origin: (other = spec) => serviceOrigin(other, installation.network.domain),
   });
 }
@@ -1345,6 +1389,7 @@ export function certSyncName(spec: ServiceSpec): string | null {
 export function deploymentGaps(
   catalog: Catalog,
   fleet: Catalog = catalog,
+  everywhere: Roles = catalog,
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -1552,7 +1597,8 @@ export function deploymentGaps(
   }
 
   const accounts = catalog.services.filter((spec) => spec.metricsAccount !== undefined);
-  if (catalog.metrics === undefined && accounts.length > 0) {
+  // The hub may run on another board: the account is made by calling it there.
+  if ((catalog.metrics ?? everywhere.metrics) === undefined && accounts.length > 0) {
     errors.push(
       "no deployed entry claims the metrics role, and these are deployed with an account on " +
         `it: ${named(accounts)} — there is no hub for the deploy to create one on, and the ` +
