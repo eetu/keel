@@ -286,6 +286,14 @@ export type MetricsApi = {
  * entry claims the metrics role, its password is generated where it is sealed,
  * and it reaches the container as an env file of its own.
  */
+/** A Pi-hole's lists, owned by the deploy. See `ServiceSpec.adlists`. */
+export type Adlists = {
+  /** The API's path on the service's own port, answered on loopback. */
+  api: string;
+  /** Every blocklist subscribed to. An allow list not named here is removed too. */
+  block: readonly string[];
+};
+
 export type MetricsAccount = {
   /** What the account may do on the hub. A page that draws graphs asks for `readonly`. */
   role: "readonly" | "user";
@@ -854,6 +862,15 @@ export type ServiceSpec = {
    * container reads it from.
    */
   metricsAccount?: MetricsAccount;
+  /**
+   * Pi-hole's subscribed lists, as the exact set: the deploy adds what is
+   * missing, removes what is not declared, and rebuilds gravity when either
+   * happened. The lists live in the service's own database, so without this
+   * they are state — a restored backup carries them, a fresh board has none,
+   * and a list added in the web UI is invisible to every review. `read` asks
+   * the API, so a list changed there is drift on a refresh.
+   */
+  adlists?: Adlists;
   /**
    * The first account on this service, claimed by the deploy. Declaring it is
    * what creates the resource that posts the setup call, and the token that call

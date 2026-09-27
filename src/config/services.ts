@@ -466,6 +466,18 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     // check is a query for Pi-hole's own name, which is the actual contract:
     // +norecurse so it tests this resolver rather than the internet behind it.
     healthCmd: "dig +norecurse +retry=0 @127.0.0.1 pi.hole",
+    // The exact set, owned by the deploy. StevenBlack is Pi-hole's own default;
+    // hagezi's pro, threat-intelligence and pop-up lists are the ones a clone
+    // is offered, and none of them names a house.
+    adlists: {
+      api: "/api",
+      block: [
+        "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.medium.txt",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/popupads.txt",
+      ],
+    },
     backup: true,
     // It is the resolver: every deployed vhost's LAN record is a line this
     // writes, into the directory dnsmasq's `hostsdir` watches.
