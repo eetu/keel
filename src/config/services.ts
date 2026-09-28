@@ -372,7 +372,7 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     name: "vaultwarden",
     description: "Bitwarden-compatible password server",
     image:
-      "docker.io/vaultwarden/server:1.37.2@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912",
+      "docker.io/vaultwarden/server:1.37.3@sha256:1587c45feaa479f1f5e8af3b00eded36bff77bcf1880cf8dbf0541706dd470e0",
     port: VAULTWARDEN_PORT,
     // A password manager's clients sit on phones and laptops whose resolver is
     // whatever the network handed them; the name has to resolve everywhere,
