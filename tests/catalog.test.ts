@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { INSTALLATION } from "../src/config/installation";
-import { IMAGE_SERVICES, priceMemory, PROFILES, tierMaxTotalMb } from "../src/config/profiles";
+import { IMAGE_SERVICES, PROFILES, priceMemory, tierMaxTotalMb } from "../src/config/profiles";
 import {
   composeCatalog,
   EXAMPLE_REMOTES,
@@ -25,7 +25,7 @@ import {
   SERVICES,
 } from "../src/config/services";
 import { LOCAL_SERVICES } from "../src/config/services.local";
-import { type RemoteSpec, type ServiceSpec } from "../src/config/spec";
+import type { RemoteSpec, ServiceSpec } from "../src/config/spec";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path: string) => readFileSync(`${root}/${path}`, "utf8");

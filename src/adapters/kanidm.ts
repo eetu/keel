@@ -6,7 +6,7 @@
  * module and read through the role the identity provider's entry claims.
  */
 
-import { type IdentityRole } from "../config/spec";
+import type { IdentityRole } from "../config/spec";
 
 /**
  * The issuer of an OAuth2 client registered with Kanidm: a path under the

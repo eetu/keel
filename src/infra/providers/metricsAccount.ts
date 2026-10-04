@@ -49,11 +49,11 @@
 
 import * as pulumi from "@pulumi/pulumi";
 
-import { type MetricsApi } from "../../config/spec";
+import type { MetricsApi } from "../../config/spec";
 import { seal } from "../age";
 import { run } from "../ssh";
 import { envLine, readField } from "../vault";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type MetricsAccountInputs = {
   /** ssh_config alias of the board the hub runs on — where these calls are made from. */

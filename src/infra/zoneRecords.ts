@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { type ZoneRecord } from "../config/types";
+import type { ZoneRecord } from "../config/types";
 
 /**
  * A zone record's resource name. The content's hash is part of it: two TXT

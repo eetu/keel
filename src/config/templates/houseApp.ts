@@ -75,8 +75,8 @@
  * and absent session key are none of the conventions here.
  */
 
-import { type SecretRef, type ServiceSetup, type ServiceSpec, type SetupContext } from "../spec";
-import { type ServiceMemory } from "../types";
+import type { SecretRef, ServiceSetup, ServiceSpec, SetupContext } from "../spec";
+import type { ServiceMemory } from "../types";
 import { OIDC_VARIABLES, oidcClientEnv, oidcClientSecretRef } from "./oidcClient";
 
 /** Where the data directory is mounted inside the container. */
@@ -131,7 +131,8 @@ type HouseAppFacts = {
  * house's item name read by every other deploy without being told.
  */
 type HouseAppAuth =
-  { auth: "open" | "edge"; identityItem?: never } | { auth: "oidc"; identityItem: string };
+  | { auth: "open" | "edge"; identityItem?: never }
+  | { auth: "oidc"; identityItem: string };
 
 /** The fields the six facts stand in for; everything else on a spec is an override. */
 type Derived = "name" | "description" | "image" | "port" | "memory" | "auth";

@@ -132,7 +132,7 @@ Three consequences worth knowing:
 
 ```fish
 node .yarn/releases/yarn-4.18.0.cjs install  # what a `yarn` on PATH delegates to
-yarn validate                 # typecheck + lint + format + tests — run before landing
+yarn validate                 # typecheck + lint (incl. formatting) + tests — run before landing
 CI=true yarn test             # the same tests, refusing to write a snapshot it has not seen
 yarn render                   # config -> build/root/
 yarn spec <name>              # one entry as it resolves — quadlet, route, caps, secret fields

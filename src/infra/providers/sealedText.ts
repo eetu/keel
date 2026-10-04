@@ -32,7 +32,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { hash, seal } from "../age";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type SealedTextInputs = {
   /**

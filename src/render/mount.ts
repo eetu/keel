@@ -24,8 +24,8 @@
  * tests rather than something a deploy discovers.
  */
 
-import { type ServiceSpec } from "../config/spec";
-import { type Share } from "../config/types";
+import type { ServiceSpec } from "../config/spec";
+import type { Share } from "../config/types";
 import { KEEL_HOSTS_SERVICE } from "./hosts";
 import { dedent } from "./tree";
 

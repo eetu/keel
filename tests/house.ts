@@ -7,7 +7,7 @@
  * copies of a fixture would be two sets of bytes that could drift apart.
  */
 
-import { type Installation } from "../src/config/types";
+import type { Installation } from "../src/config/types";
 
 export const HOUSE: Installation = {
   vault: "fixture",

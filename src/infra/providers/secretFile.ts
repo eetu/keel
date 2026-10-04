@@ -29,7 +29,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { assertSafePath, run, runOk } from "../ssh";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type SecretFileInputs = {
   /** ssh_config alias. */
@@ -116,7 +116,7 @@ const provider: pulumi.dynamic.ResourceProvider<SecretFileInputs, Outs> = {
     };
   },
 
-  async update(id, _olds, news) {
+  async update(_id, _olds, news) {
     await write(news);
     return { outs: { ...news, remoteSha: await sha256(news.ciphertext) } };
   },

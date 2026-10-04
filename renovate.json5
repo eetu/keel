@@ -61,7 +61,7 @@
     enabled: true,
   },
 
-  // package.json's devDependencies — eslint, prettier, tsx, typescript,
+  // package.json's devDependencies — biome, tsx, typescript,
   // vitest, the exact-pinned `pulumi` CLI so every machine runs the same
   // version, and the yarn release itself is a Corepack/`packageManager` bump
   // this manager also follows. The repo vendors yarn 4 (`.yarnrc.yml`,

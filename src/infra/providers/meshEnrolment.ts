@@ -31,7 +31,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { assertSafePath, assertSafeUnit, run, runOk } from "../ssh";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type MeshEnrolmentInputs = {
   /** ssh_config alias of the board being enrolled. */

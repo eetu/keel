@@ -32,7 +32,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { run, runOk } from "../ssh";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type PacketFilterInputs = {
   /** ssh_config alias. */

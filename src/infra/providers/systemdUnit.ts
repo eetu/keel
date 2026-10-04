@@ -24,7 +24,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { assertSafeUnit, run, runOk } from "../ssh";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type SystemdUnitInputs = {
   /** ssh_config alias. */
@@ -203,7 +203,7 @@ const provider: pulumi.dynamic.ResourceProvider<SystemdUnitInputs, Outs> = {
     };
   },
 
-  async update(id, _olds, news) {
+  async update(_id, _olds, news) {
     await apply(news, true);
     const { existing: _existing, ...state } = await stateOf(news);
     return { outs: { ...news, ...state } };

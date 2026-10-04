@@ -3,15 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   appsRoomMb,
   IMAGE_SERVICES,
-  priceMemory,
   PROFILES,
+  priceMemory,
   resolveMemory,
   selectProfile,
   tierMaxTotalMb,
 } from "../src/config/profiles";
 import { SERVICES } from "../src/config/services";
 import { catalogOf, type ServiceSpec } from "../src/config/spec";
-import { type ServiceMemory } from "../src/config/types";
+import type { ServiceMemory } from "../src/config/types";
 import { memoryDropInPath, renderMemory, serviceDropIn } from "../src/render/memory";
 import { renderQuadlet } from "../src/render/quadlet";
 import { CAP_HEADROOM } from "./caps";

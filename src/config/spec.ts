@@ -15,13 +15,7 @@
  * match.
  */
 
-import {
-  type Installation,
-  type Network,
-  type ServiceFile,
-  type ServiceMemory,
-  type ServiceSecretFile,
-} from "./types";
+import type { Installation, Network, ServiceFile, ServiceMemory, ServiceSecretFile } from "./types";
 
 export type Egress =
   /** No route off the host. The default: a service earns internet access. */

@@ -13,7 +13,7 @@
  * knows the gate is oauth2-proxy.
  */
 
-import { type GateRole } from "../config/spec";
+import type { GateRole } from "../config/spec";
 
 /** Answers the proxy's yes/no query about a request. */
 const AUTH_PATH = "/oauth2/auth";
