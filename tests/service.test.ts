@@ -32,18 +32,18 @@ import {
   roleHost,
   routedServices,
   runSetup,
+  type ServiceSpec,
+  type SetupContext,
   secretFields,
   secretFileShape,
   secretsPath,
   serviceOrigin,
-  type ServiceSpec,
-  type SetupContext,
   subdomainOf,
   unbackedServices,
   vhosts,
 } from "../src/config/spec";
 import { oidcClientEnv } from "../src/config/templates/oidcClient";
-import { type ServiceSecretFile } from "../src/config/types";
+import type { ServiceSecretFile } from "../src/config/types";
 import { publicProxyIngress } from "../src/render/nftPorts";
 import {
   backendPort,

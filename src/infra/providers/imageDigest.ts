@@ -69,7 +69,7 @@ const provider: pulumi.dynamic.ResourceProvider<ImageDigestInputs, Outs> = {
     return { changes: olds.ref !== news.ref };
   },
 
-  async update(id, _olds, news) {
+  async update(_id, _olds, news) {
     return { outs: { ...news, digestRef: await resolveDigest(news.ref) } };
   },
 

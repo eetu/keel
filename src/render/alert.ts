@@ -31,7 +31,7 @@
  * every boot is one alert, not one per boot.
  */
 
-import { type AlertSink } from "../config/types";
+import type { AlertSink } from "../config/types";
 import { dedent, file, merge, script, type Tree } from "./tree";
 
 /** Read by the script; written by the deploy layer as `KEY=VALUE` lines. */

@@ -17,7 +17,7 @@
  * drifting into naming different clients.
  */
 
-import { type SecretRef, type SetupContext } from "../spec";
+import type { SecretRef, SetupContext } from "../spec";
 
 /**
  * What one client's four facts are called in its own environment. The house's

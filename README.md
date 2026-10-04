@@ -440,7 +440,7 @@ outside the catalog that names two services or branches on one's name.
 # The two installation modules go in first — quickstart step 1. Without them
 # `validate` is two unresolved imports rather than a test result.
 node .yarn/releases/yarn-4.18.0.cjs install
-yarn validate                 # typecheck + lint + format + render tests
+yarn validate                 # typecheck + lint (incl. formatting) + render tests
 yarn render                   # config -> build/root/
 image/build.sh                # render + podman build --arch arm64, tagged keel:latest
 image/test.sh keel:latest     # bootc lint, unit syntax, generator profiles

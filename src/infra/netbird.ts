@@ -57,9 +57,9 @@
  */
 
 import * as netbird from "@pulumi/netbird";
-import * as pulumi from "@pulumi/pulumi";
+import type * as pulumi from "@pulumi/pulumi";
 
-import { type MeshState } from "../config/spec";
+import type { MeshState } from "../config/spec";
 import MeshAgent from "./meshAgent";
 
 /**

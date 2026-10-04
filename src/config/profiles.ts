@@ -27,7 +27,7 @@
  */
 
 import { SERVICES } from "./services";
-import { type ServiceMemory, type Tier } from "./types";
+import type { ServiceMemory, Tier } from "./types";
 
 /**
  * Services the image itself runs, and therefore the only caps the image ships.

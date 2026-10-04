@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { type BootstrapApi } from "../src/config/spec";
+import type { BootstrapApi } from "../src/config/spec";
 import {
   accountProvider,
   type BootstrapAccountInputs,

@@ -1,6 +1,6 @@
 # EditorConfig — https://editorconfig.org
-# Prettier reads indent_style, indent_size/tab_width, max_line_length and
-# end_of_line from here, so indentation + line width live here, not in .prettierrc.
+# Editors read indentation and line width from here; Biome (via @anarkisti/biome-config)
+# formats with the same 2 spaces and 100 columns.
 root = true
 
 [*]

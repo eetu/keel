@@ -53,10 +53,10 @@
 
 import * as pulumi from "@pulumi/pulumi";
 
-import { type BootstrapApi } from "../../config/spec";
+import type { BootstrapApi } from "../../config/spec";
 import { run } from "../ssh";
 import { readField } from "../vault";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type BootstrapAccountInputs = {
   /** ssh_config alias of the board the coordinator runs on — where these calls are made from. */
@@ -492,7 +492,7 @@ export const accountProvider: pulumi.dynamic.ResourceProvider<BootstrapAccountIn
       return claim(inputs);
     },
 
-    async read(id, props) {
+    async read(_id, props) {
       // Nothing to re-derive from on `pulumi import`: the id names an account on
       // some coordinator, and which one — and with which token — is not in it.
       if (!props) return { id: undefined };

@@ -1,8 +1,8 @@
 import {
   appsRoomMb,
   IMAGE_SERVICES,
-  type Profile,
   PROFILES,
+  type Profile,
   resolveMemory,
   tierMaxTotalMb,
 } from "../config/profiles";

@@ -28,7 +28,7 @@
  * and shows the shape. Delete it once you have your own.
  */
 
-import { type RemoteSpec, type ServiceSpec } from "./spec";
+import type { RemoteSpec, ServiceSpec } from "./spec";
 
 export const LOCAL_SERVICES: readonly ServiceSpec[] = [
   {

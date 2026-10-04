@@ -18,7 +18,7 @@ import {
 } from "../src/config/backup";
 import { SERVICES } from "../src/config/services";
 import { backupPath, type ServiceSpec } from "../src/config/spec";
-import { type BackupTarget } from "../src/config/types";
+import type { BackupTarget } from "../src/config/types";
 import {
   BACKUP_CONFIG_PATH,
   BACKUP_SCRIPT,

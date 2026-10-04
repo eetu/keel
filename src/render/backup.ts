@@ -35,7 +35,7 @@ import {
   SHARE_MOUNTPOINT,
 } from "../config/backup";
 import { backupPath, type ServiceSpec } from "../config/spec";
-import { type BackupTarget } from "../config/types";
+import type { BackupTarget } from "../config/types";
 import { dedent } from "./tree";
 
 /** The unit pair's names. Both timers are enabled by the deploy layer. */

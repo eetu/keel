@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { INSTALLATION } from "../src/config/installation";
 import { SERVICES } from "../src/config/services";
 import { SHARE_CREDENTIAL_FIELDS, SHARE_VAULT_ITEM } from "../src/config/shares";
-import { type ServiceSpec } from "../src/config/spec";
-import { type Share } from "../src/config/types";
+import type { ServiceSpec } from "../src/config/spec";
+import type { Share } from "../src/config/types";
 import { KEEL_HOSTS_SERVICE } from "../src/render/hosts";
 import {
   canonicalPath,

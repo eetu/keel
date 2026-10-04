@@ -120,7 +120,7 @@ const provider: pulumi.dynamic.ResourceProvider<SealedEnvInputs, Outs> = {
     };
   },
 
-  async update(id, _olds, news) {
+  async update(_id, _olds, news) {
     const sealed = await seal(
       await readEnvFile(news.vault, news.item, news.fields, news.fieldItems),
       news.ageRecipient,

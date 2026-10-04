@@ -15,7 +15,7 @@
  * never appear here; they live in the vault and reach a host as age ciphertext.
  */
 
-import { type Installation } from "./types";
+import type { Installation } from "./types";
 
 export const INSTALLATION: Installation = {
   /**

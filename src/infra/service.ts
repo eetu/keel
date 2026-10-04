@@ -34,10 +34,10 @@ import {
   type MetricsRole,
   metricsSecretsPath,
   SECRETS_DIR,
-  secretsPath,
   type ServiceSpec,
+  secretsPath,
 } from "../config/spec";
-import { type ServiceFile, type ServiceSecretFile } from "../config/types";
+import type { ServiceFile, ServiceSecretFile } from "../config/types";
 import { memoryDropInPath, serviceDropIn } from "../render/memory";
 import {
   proxyPath,

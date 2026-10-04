@@ -28,7 +28,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { assertSafePath, run } from "../ssh";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type RemoteBinaryInputs = {
   /** ssh_config alias. */
@@ -99,7 +99,7 @@ const provider: pulumi.dynamic.ResourceProvider<RemoteBinaryInputs, Outs> = {
     return { changes: replaces.length > 0, replaces, deleteBeforeReplace: true };
   },
 
-  async update(id, _olds, news) {
+  async update(_id, _olds, news) {
     // Unreachable while `diff` replaces on both inputs; the probe is here so
     // that widening `diff` later cannot quietly stop asking the machine.
     if (!(await probe(news))) throw new Error(`${news.host} has no ${news.path}`);

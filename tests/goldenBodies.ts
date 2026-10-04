@@ -15,11 +15,11 @@ import { PROFILES } from "../src/config/profiles";
 import {
   type Catalog,
   runSetup,
-  secretFileShape,
   type ServiceSpec,
+  secretFileShape,
   subdomainOf,
 } from "../src/config/spec";
-import { type Installation, type ServiceFile } from "../src/config/types";
+import type { Installation, ServiceFile } from "../src/config/types";
 import { serviceDropIn } from "../src/render/memory";
 import { quadletPath, renderQuadlet } from "../src/render/quadlet";
 

@@ -14,18 +14,18 @@
 
 import { describe, expect, it } from "vitest";
 
-import { priceMemory, PROFILES } from "../src/config/profiles";
+import { PROFILES, priceMemory } from "../src/config/profiles";
 import { composeCatalog, EXAMPLE_SERVICES } from "../src/config/services";
 import {
   catalogOf,
   deploymentGaps,
   runSetup,
+  type ServiceSpec,
   secretFields,
   secretsPath,
-  type ServiceSpec,
   subdomainOf,
 } from "../src/config/spec";
-import { houseApp, type HouseAppOptions } from "../src/config/templates/houseApp";
+import { type HouseAppOptions, houseApp } from "../src/config/templates/houseApp";
 import { renderQuadlet } from "../src/render/quadlet";
 import { CAP_HEADROOM } from "./caps";
 import { HOUSE } from "./house";

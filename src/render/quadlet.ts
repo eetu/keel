@@ -5,8 +5,8 @@ import {
   metricsSecretsPath,
   type Roles,
   SECRETS_DIR,
-  secretsPath,
   type ServiceSpec,
+  secretsPath,
 } from "../config/spec";
 import { dedent, file, merge, type Tree } from "./tree";
 

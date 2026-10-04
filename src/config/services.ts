@@ -51,8 +51,8 @@ import {
   TRAEFIK_MIDDLEWARES_PATH,
   TRAEFIK_PROXY,
   TRAEFIK_STATIC_PATH,
-  traefikMiddlewares,
   type TraefikOptions,
+  traefikMiddlewares,
   traefikStatic,
 } from "../adapters/traefik";
 import { UNBOUND } from "./keel";
@@ -505,12 +505,12 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
             // Restarting Pi-hole for one record would be LAN DNS downtime to
             // add a line.
             restarts: false,
-            content:
-              [
-                "# Written by the deploy from the catalog — do not edit by hand.",
-                "# Pi-hole's own local DNS records live in its web UI, not here.",
-                ...lines,
-              ].join("\n") + "\n",
+            content: [
+              "# Written by the deploy from the catalog — do not edit by hand.",
+              "# Pi-hole's own local DNS records live in its web UI, not here.",
+              ...lines,
+              "",
+            ].join("\n"),
           },
         ],
       };

@@ -30,7 +30,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { run } from "../ssh";
-import { type Args } from "./inputs";
+import type { Args } from "./inputs";
 
 export type PiholeListsInputs = {
   host: string;

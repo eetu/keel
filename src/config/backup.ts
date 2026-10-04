@@ -7,7 +7,7 @@
  * here is the shape of the backup itself, and it is the same on every board.
  */
 
-import { type SecretRef } from "./spec";
+import type { SecretRef } from "./spec";
 
 /**
  * Restic, as a container. The board runs one image for its whole OS and that
