@@ -254,7 +254,7 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     name: SESSION_GATE,
     description: "Forward-auth gate in front of every SSO route",
     image:
-      "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded",
+      "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
     port: OAUTH2_PROXY_PORT,
     memory: { max: 48, measuredMb: 18, tier: "core" },
     // Traefik calls it as a middleware, but the browser is sent back here after
