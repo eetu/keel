@@ -40,6 +40,7 @@
 
 import * as pulumi from "@pulumi/pulumi";
 
+import { locked } from "../lock";
 import { run } from "../ssh";
 import { fieldMissing, readField, writeField } from "../vault";
 import type { Args } from "./inputs";
@@ -139,6 +140,7 @@ BASE = "https://127.0.0.1:%d" % P["port"]
 CONTEXT = ssl._create_unverified_context()
 SESSION = "X-KANIDM-AUTH-SESSION-ID"
 SHORT = "oauth2_prefer_short_username"
+WRITE_ATTEMPTS = 5
 PKCE = "oauth2_allow_insecure_client_disable_pkce"
 
 
@@ -160,14 +162,20 @@ def call(method, path, body=None, token=None, session=None, missing=False):
         headers[SESSION] = session
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, context=CONTEXT, timeout=30) as answer:
-            raw = answer.read()
-            return answer.headers.get(SESSION), (json.loads(raw) if raw.strip() else None)
-    except urllib.error.HTTPError as error:
-        if missing and error.code == 404:
-            return None, None
-        fail("%s %s answered %d" % (method, path.split("?")[0], error.code))
+    # The server takes one write at a time and answers one it could not get a
+    # turn for with a 500, having applied nothing — so that is asked again.
+    for attempt in range(WRITE_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, context=CONTEXT, timeout=30) as answer:
+                raw = answer.read()
+                return answer.headers.get(SESSION), (json.loads(raw) if raw.strip() else None)
+        except urllib.error.HTTPError as error:
+            if missing and error.code == 404:
+                return None, None
+            if error.code in (500, 503) and attempt + 1 < WRITE_ATTEMPTS:
+                time.sleep(2 * (attempt + 1))
+                continue
+            fail("%s %s answered %d" % (method, path.split("?")[0], error.code))
 
 
 def serving():
@@ -454,11 +462,10 @@ function address(props: KanidmClientInputs): string {
  * what an adoption kept is a diff the next plan shows.
  */
 async function apply(inputs: KanidmClientInputs, adopting: boolean): Promise<ClientOuts> {
-  const answer = await speak<{ state: Observed; secret: string }>(
-    inputs,
-    "register",
-    APPLY,
-    adopting,
+  // One registration writes to the server at a time: it serves one write at a
+  // time, and gives up on one that waits a few seconds for its turn.
+  const answer = await locked(`kanidm-${inputs.host}-${inputs.port}`, () =>
+    speak<{ state: Observed; secret: string }>(inputs, "register", APPLY, adopting),
   );
   const { vault, secret } = inputs;
   if ((await readField(vault, secret.item, secret.field)) !== answer.secret) {
@@ -545,7 +552,7 @@ export const clientProvider: pulumi.dynamic.ResourceProvider<KanidmClientInputs,
   },
 
   async delete(_id, props) {
-    await speak(props, "remove", REMOVE);
+    await locked(`kanidm-${props.host}-${props.port}`, () => speak(props, "remove", REMOVE));
   },
 };
 

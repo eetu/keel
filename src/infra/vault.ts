@@ -24,6 +24,8 @@
  * row stopped at one such loser before this, each on a different field.
  */
 
+import { locked } from "./lock";
+
 /** What `op` says when the reference itself is wrong; anything else is retried. */
 const DEFINITE = /isn't an item|isn't a field|could not find|not found|no such/i;
 
@@ -64,7 +66,7 @@ export async function writeField(
   field: string,
   value: string,
 ): Promise<void> {
-  await locked(`${vault}-${item}`, () => edit(vault, item, field, value));
+  await locked(`vault-${vault}-${item}`, () => edit(vault, item, field, value));
 }
 
 /**
@@ -90,36 +92,6 @@ export async function fieldMissing(vault: string, item: string, field: string): 
     return !fields.some((entry) => entry.label === field);
   } catch (error) {
     return /isn't an item/i.test(String((error as { stderr?: string }).stderr ?? ""));
-  }
-}
-
-/**
- * A lock directory in the temporary directory, held while `run` does. `mkdir`
- * either makes it or finds it, atomically, whichever process asks; one older
- * than any edit takes is a run that died holding it.
- */
-async function locked<T>(name: string, run: () => Promise<T>): Promise<T> {
-  const { mkdir, rmdir, stat } = await import("node:fs/promises");
-  const { tmpdir } = await import("node:os");
-  const path = `${tmpdir()}/keel-vault-${name.replace(/[^A-Za-z0-9_-]/g, "_")}.lock`;
-  for (;;) {
-    try {
-      await mkdir(path);
-      break;
-    } catch (error) {
-      if ((error as { code?: string }).code !== "EEXIST") throw error;
-      const since = await stat(path).then(
-        (found) => Date.now() - found.mtimeMs,
-        () => 0,
-      );
-      if (since > 300_000) await rmdir(path).catch(() => undefined);
-      else await new Promise((wake) => setTimeout(wake, 250));
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    await rmdir(path).catch(() => undefined);
   }
 }
 

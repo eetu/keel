@@ -560,7 +560,7 @@ vhost — and an empty field fails by name.
 **The identity provider registers its clients, and writes their secrets.** An
 entry's `oidcClient` is registered by the board that runs Kanidm —
 `KanidmClient` (`src/infra/providers/kanidmClient.ts`), one per client in the
-fleet, over ssh to the server's loopback, side by side — as the exact set
+fleet, over ssh to the server's loopback, side by side with their writes taking turns — Kanidm serves one write at a time and answers one that waited too long with a 500, which the program asks again — as the exact set
 it declares: its redirects under the entry's own origin, who may sign in, the
 members of the groups it brings, whether it does PKCE and, where it says so,
 whether `preferred_username` is the plain name. Kanidm generates a client's

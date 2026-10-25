@@ -93,6 +93,8 @@ const PERSONS: Record<string, string> = {
 
 /** A Kanidm that answers the calls the program makes, and records each one. */
 async function kanidm(start: {
+  /** Writes answered 500 before one goes through, as an overloaded server does. */
+  overloaded?: number;
   clients?: Record<
     string,
     { attrs: Record<string, string[]>; scopeMap?: Record<string, string[]> }
@@ -117,6 +119,7 @@ async function kanidm(start: {
     });
   }
   const seen: Seen[] = [];
+  let overloaded = start.overloaded ?? 0;
 
   const server: Server = createServer(tls, (request, response) => {
     let raw = "";
@@ -198,6 +201,10 @@ async function kanidm(start: {
             return answer(200, null);
           }
           if (method === "PATCH") {
+            if (overloaded > 0) {
+              overloaded -= 1;
+              return answer(500, "overloaded");
+            }
             Object.assign(
               client.attrs,
               asKept((body as { attrs: Record<string, string[]> }).attrs),
@@ -404,6 +411,14 @@ describe("registering a client", () => {
     expect(client.attrs.oauth2_allow_insecure_client_disable_pkce).toBeUndefined();
     expect([...client.scopeMap.keys()]).toEqual(["uuid-group-kb_users"]);
     expect(server.groups.get("kb_admins")?.members).toEqual(["uuid-person-eetu"]);
+  });
+
+  it("asks again when the server is too busy to take a write, which it then applies", async () => {
+    // Kanidm takes one write at a time and answers one that waited too long for
+    // its turn with a 500, having applied nothing.
+    server = await kanidm({ overloaded: 1 });
+    await clientProvider.create!(declared(server.port, { shortUsername: true }));
+    expect(server.clients.get("kb")!.attrs.oauth2_prefer_short_username).toEqual(["true"]);
   });
 
   it("sets the short username only where the declaration states it", async () => {
