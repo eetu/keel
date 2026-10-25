@@ -560,21 +560,30 @@ vhost — and an empty field fails by name.
 **The identity provider registers its clients, and writes their secrets.** An
 entry's `oidcClient` is registered by the board that runs Kanidm —
 `KanidmClient` (`src/infra/providers/kanidmClient.ts`), one per client in the
-fleet, over ssh to the server's loopback — as the exact set it declares: its
-redirects under the entry's own origin, who may sign in, the members of the
-groups it brings and whether it does PKCE. Kanidm generates a client's secret and
-nothing can set it, so the registration writes it into the vault field the client
-already reads, `kanidm/<client id>_client_secret`, and the client's `SealedEnv`
-waits for that registration in the same run. **These, and the admin password
-below, are the only vault writes keel makes**: values a server minted, written
-where every reader already looks, with a hash in state and never the value.
+fleet, over ssh to the server's loopback, one after another — as the exact set
+it declares: its redirects under the entry's own origin, who may sign in, the
+members of the groups it brings, whether it does PKCE and, where it says so,
+whether `preferred_username` is the plain name. Kanidm generates a client's
+secret and nothing can set it, so the registration writes it into the vault field
+the client already reads, `kanidm/<client id>_client_secret`, reads it back, and
+hands its hash to the client's `SealedEnv` as `revision` — an input, so it is the
+edge that orders the read after the write and re-seals in the run that wrote a
+new one. **These, and the admin password below, are the only vault writes keel
+makes**: values a server minted, written where every reader already looks, with
+a hash in state and never the value. The write is `op item edit`'s assignment
+form, so the value is on the deploy machine's command line for the length of
+the call. **A client met by `create` that the server already has is adopted by
+adding to it** — redirects, scope maps and members join what is there, and PKCE
+left off stays off — because a create has no plan line that shows what it would
+take away; what it kept is in its outputs, so the next plan shows the removal as
+an update for a person to read. A deleted client's vault field stays.
 `KanidmAdmin` recovers `idm_admin` with `kanidmd scripting recover-account` when
 the vault definitely has no password for it — asked with `op item get`, because
 `readField`'s "" is also an unreachable vault, and resetting a password nobody
 then holds is the one outcome worse than a failed run. `read` asks the server for
 the client and compares its secret with the vault's by hash, so a redirect added
 in the web UI is drift, and a secret reset there is a client the next `up`
-adopts and writes again.
+adopts, writes into the vault and re-seals for the service, in that one run.
 
 **The mesh's own state is a bridged provider's, not a client written here.**
 Everything behind the coordinator's API — the account settings, the groups, the
@@ -1175,8 +1184,10 @@ start` on it is a no-op, and a name list written after boot would sit
 - **A field the run itself writes is read after the resource that writes it.**
   `kanidm/oauth2_proxy_client_secret` exists only once the gate is registered
   with a _running_ Kanidm, so **a `SealedEnv` carries the same dependencies its
-  service does, and its client's registration**: the read happens after the
-  write rather than in the first seconds. Without that edge it is a root of the
+  service does, and its client's registration as an input** (`revision`): the
+  read happens after the write rather than in the first seconds, and an entry
+  with an `oidcClient` is ordered after the identity provider whatever its
+  `auth`, so the registration exists when it is reached. Without that edge it is a root of the
   graph — Pulumi stops an update at the first error, so the read would fail
   immediately and kill the run that was going to write the field, which is a
   bootstrap with no fixed point. A client on another board has no such edge: its

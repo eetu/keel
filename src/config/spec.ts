@@ -251,6 +251,13 @@ export type OidcClientSpec = {
   groups?: Readonly<Record<string, readonly string[]>>;
   /** Off for a client that cannot do PKCE. On by default. */
   pkce?: boolean;
+  /**
+   * Whether `preferred_username` carries the plain name rather than the SPN
+   * (`alice` rather than `alice@idm.example`). Left as the provider has it
+   * unless stated, since a client that keys its users on that claim would see
+   * every one of them as somebody new.
+   */
+  shortUsername?: boolean;
 };
 
 /** Everyone with a person account, which is who a client admits unless it says otherwise. */
@@ -1311,7 +1318,11 @@ export function wanRecords(
  */
 export function dependencyNames(spec: ServiceSpec, roles: Roles): readonly string[] {
   const derived = [
-    ...(spec.auth === "oidc" && roles.identity !== undefined ? [roles.identity.spec.name] : []),
+    // A client of the issuer, whether it runs the flow itself or is registered
+    // with it: its secret exists once the provider is up and has registered it.
+    ...((spec.auth === "oidc" || spec.oidcClient !== undefined) && roles.identity !== undefined
+      ? [roles.identity.spec.name]
+      : []),
     ...(spec.certificates !== undefined && roles.proxy !== undefined
       ? [roles.proxy.spec.name]
       : []),
@@ -1803,6 +1814,7 @@ export type OidcRegistration = {
   scopeMap: Readonly<Record<string, readonly string[]>>;
   groups: Readonly<Record<string, readonly string[]>>;
   pkce: boolean;
+  shortUsername?: boolean;
   /** Where the generated secret lands: the field the client's entry reads. */
   secret: { item: string; field: string };
 };
@@ -1818,6 +1830,21 @@ export function oidcRegistrations(
   identityItem: string,
   domain: string,
 ): readonly OidcRegistration[] {
+  // A group is one client's: two that both declared members for it would set
+  // them in turn on every run, each undoing the other.
+  const owners = new Map<string, string>();
+  for (const spec of specs) {
+    for (const group of Object.keys(spec.oidcClient?.groups ?? {})) {
+      const other = owners.get(group);
+      if (other !== undefined) {
+        throw new Error(
+          `${spec.name} and ${other} both declare the group ${group} — one client brings it, ` +
+            "the other names it in its scopeMap",
+        );
+      }
+      owners.set(group, spec.name);
+    }
+  }
   return specs.flatMap((spec) => {
     const client = spec.oidcClient;
     if (client === undefined) return [];
@@ -1833,6 +1860,7 @@ export function oidcRegistrations(
         scopeMap: client.scopeMap ?? { [EVERY_PERSON]: DEFAULT_SCOPES },
         groups: client.groups ?? {},
         pkce: client.pkce ?? true,
+        ...(client.shortUsername === undefined ? {} : { shortUsername: client.shortUsername }),
         secret: oidcClientSecretRef(identityItem, id),
       },
     ];

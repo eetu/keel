@@ -194,7 +194,10 @@ client once Kanidm answers, and writes the secret it generated into that field
 before the gate's environment is sealed — so one run brings the login up. Every
 entry with an `oidcClient` is registered the same way, on the board that runs
 Kanidm, its secret written to `kanidm/<client id>_client_secret`; a client on
-another board reads it there once that board has been deployed.
+another board reads it there once that board has been deployed. A client
+Kanidm already has — registered by hand before — is adopted by adding to it,
+and the next plan shows what the declaration would remove, for you to read
+before it does.
 `kanidm/idm_admin_password`, the account the registrations sign in as, is the
 deploy's too: when the vault has none, the run resets it with Kanidm's own
 `recover-account` and writes what that printed. Nothing is staged by hand: the

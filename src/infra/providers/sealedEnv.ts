@@ -24,6 +24,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 import { hash, seal } from "../age";
 import { readEnvFile } from "../vault";
+import type { Args } from "./inputs";
 
 export type SealedEnvInputs = {
   /** The 1Password vault the item lives in. */
@@ -44,6 +45,13 @@ export type SealedEnvInputs = {
    * lets you encrypt *to* the host.
    */
   ageRecipient: string;
+  /**
+   * A hash of a credential this run writes into one of the fields — an OAuth2
+   * client's secret, as its registration reports it. A new one re-seals in the
+   * same run that wrote it, where a diff of the field names alone would wait
+   * for the next refresh. Absent everywhere else.
+   */
+  revision?: string;
 };
 
 type Outs = SealedEnvInputs & {
@@ -116,7 +124,8 @@ const provider: pulumi.dynamic.ResourceProvider<SealedEnvInputs, Outs> = {
         olds.item !== news.item ||
         olds.ageRecipient !== news.ageRecipient ||
         fingerprint(olds.fields) !== fingerprint(news.fields) ||
-        fingerprint(olds.fieldItems) !== fingerprint(news.fieldItems),
+        fingerprint(olds.fieldItems) !== fingerprint(news.fieldItems) ||
+        olds.revision !== news.revision,
     };
   },
 
@@ -137,7 +146,7 @@ export class SealedEnv extends pulumi.dynamic.Resource {
   declare public readonly ciphertext: pulumi.Output<string>;
   declare public readonly plaintextHash: pulumi.Output<string>;
 
-  constructor(name: string, args: SealedEnvInputs, opts?: pulumi.CustomResourceOptions) {
+  constructor(name: string, args: Args<SealedEnvInputs>, opts?: pulumi.CustomResourceOptions) {
     super(provider, name, { ...args, ciphertext: undefined, plaintextHash: undefined }, opts);
   }
 }

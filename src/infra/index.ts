@@ -445,6 +445,7 @@ for (const spec of ordered) {
   // service which would have made the field answerable. This is what makes a
   // fresh installation's first `up` stop *at* the gate rather than before
   // anything.
+  const registration = registrations.get(spec.name);
   const sealed =
     needsSecrets && ageRecipient
       ? new SealedEnv(
@@ -454,12 +455,12 @@ for (const spec of ordered) {
             item,
             ...sealedFields(item, secretFields(spec)),
             ageRecipient,
+            // A client's secret is written by its registration — on a first
+            // deploy in this same run — and a new one re-seals in the run that
+            // wrote it. The registration is an input, so it is an edge as well.
+            ...(registration === undefined ? {} : { revision: registration.secretHash }),
           },
-          // A client's secret is written by its registration, on a first deploy
-          // in this same run.
-          {
-            dependsOn: [...needs, ...[registrations.get(spec.name)].filter((r) => r !== undefined)],
-          },
+          { dependsOn: needs },
         )
       : undefined;
 
@@ -537,34 +538,37 @@ for (const spec of ordered) {
       },
       { dependsOn: [service] },
     );
+    // One at a time: each writes a field on the same vault item, and an edit of
+    // an item is a read-modify-write that a concurrent one can undo.
+    let previous: pulumi.Resource = admin;
     const fleetSpecs = fleetServices(INSTALLATION, SERVICES);
     for (const client of oidcRegistrations(fleetSpecs, identityItem, INSTALLATION.network.domain)) {
-      registrations.set(
-        client.service,
-        new KanidmClient(
-          `${client.service}-oidc-client`,
-          {
-            host: sshTarget,
-            sshArgs,
-            port: spec.port,
-            vault,
-            admin: {
-              account: adminRole.account,
-              item: identityItem,
-              field: adminRole.passwordField,
-            },
-            clientId: client.id,
-            displayName: client.displayName,
-            landing: client.landing,
-            redirects: client.redirects,
-            scopeMap: client.scopeMap,
-            groups: client.groups,
-            pkce: client.pkce,
-            secret: client.secret,
+      const registration = new KanidmClient(
+        `${client.service}-oidc-client`,
+        {
+          host: sshTarget,
+          sshArgs,
+          port: spec.port,
+          vault,
+          admin: {
+            account: adminRole.account,
+            item: identityItem,
+            field: adminRole.passwordField,
           },
-          { dependsOn: [admin] },
-        ),
+          clientId: client.id,
+          displayName: client.displayName,
+          landing: client.landing,
+          redirects: client.redirects,
+          scopeMap: client.scopeMap,
+          groups: client.groups,
+          pkce: client.pkce,
+          ...(client.shortUsername === undefined ? {} : { shortUsername: client.shortUsername }),
+          secret: client.secret,
+        },
+        { dependsOn: [previous] },
       );
+      registrations.set(client.service, registration);
+      previous = registration;
     }
   }
 }

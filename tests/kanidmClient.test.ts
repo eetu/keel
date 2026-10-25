@@ -20,7 +20,12 @@ import { tmpdir } from "node:os";
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SERVICES } from "../src/config/services";
-import { oidcRegistrations, type ServiceSpec } from "../src/config/spec";
+import {
+  catalogOf,
+  dependencyNames,
+  oidcRegistrations,
+  type ServiceSpec,
+} from "../src/config/spec";
 import {
   adminProvider,
   clientProvider,
@@ -32,7 +37,7 @@ const VAULT = "fixture";
 const PASSWORD = "admin-password";
 const REALM = "idm.example.test";
 
-type Seen = { method: string; path: string; session: string; body: unknown };
+type Seen = { method: string; path: string; session: string; type: string; body: unknown };
 
 type Client = { attrs: Record<string, string[]>; scopeMap: Map<string, string[]>; secret: string };
 
@@ -69,8 +74,22 @@ beforeAll(() => {
   };
 });
 
+/** URL attributes as the server keeps them: parsed, so a bare origin ends in a slash. */
+function asKept(attrs: Record<string, string[]>): Record<string, string[]> {
+  const urls = ["oauth2_rs_origin", "oauth2_rs_origin_landing"];
+  return Object.fromEntries(
+    Object.entries(attrs).map(([name, values]) => [
+      name,
+      urls.includes(name) ? values.map((value) => new URL(value).href) : values,
+    ]),
+  );
+}
+
 /** Persons the server knows, by name, with their UUIDs. */
-const PERSONS: Record<string, string> = { eetu: "uuid-person-eetu" };
+const PERSONS: Record<string, string> = {
+  eetu: "uuid-person-eetu",
+  someone: "uuid-person-someone",
+};
 
 /** A Kanidm that answers the calls the program makes, and records each one. */
 async function kanidm(start: {
@@ -107,7 +126,8 @@ async function kanidm(start: {
       const method = request.method ?? "";
       const body: unknown = raw === "" ? undefined : JSON.parse(raw);
       const session = String(request.headers["x-kanidm-auth-session-id"] ?? "");
-      seen.push({ method, path, session, body });
+      const type = String(request.headers["content-type"] ?? "");
+      seen.push({ method, path, session, type, body });
       const answer = (status: number, payload: unknown, headers: Record<string, string> = {}) => {
         response.writeHead(status, { "Content-Type": "application/json", ...headers });
         response.end(payload === undefined ? "" : JSON.stringify(payload));
@@ -162,7 +182,7 @@ async function kanidm(start: {
       // /v1/oauth2/...
       if (parts[1] === "oauth2") {
         if (parts[2] === "_basic") {
-          const attrs = (body as { attrs: Record<string, string[]> }).attrs;
+          const attrs = asKept((body as { attrs: Record<string, string[]> }).attrs);
           clients.set(attrs.name[0], {
             attrs,
             scopeMap: new Map(),
@@ -178,7 +198,10 @@ async function kanidm(start: {
             return answer(200, null);
           }
           if (method === "PATCH") {
-            Object.assign(client.attrs, (body as { attrs: Record<string, string[]> }).attrs);
+            Object.assign(
+              client.attrs,
+              asKept((body as { attrs: Record<string, string[]> }).attrs),
+            );
             return answer(200, null);
           }
           const scopeMap = [...client.scopeMap].map(
@@ -325,7 +348,7 @@ describe("registering a client", () => {
       "https://kb.example.test/auth/callback",
       "https://kb.example.test/oauth/callback",
     ]);
-    expect(client.attrs.oauth2_rs_origin_landing).toEqual(["https://kb.example.test"]);
+    expect(client.attrs.oauth2_rs_origin_landing).toEqual(["https://kb.example.test/"]);
     expect(client.scopeMap.get("uuid-group-kb_users")).toEqual([
       "email",
       "groups",
@@ -340,7 +363,7 @@ describe("registering a client", () => {
     expect(JSON.stringify(made.outs)).not.toContain("secret-kb");
   });
 
-  it("adopts a client registered by hand and converges it to the declaration", async () => {
+  it("adopts a client registered by hand by adding to it, and converges it on the next update", async () => {
     server = await kanidm({
       clients: {
         kb: {
@@ -353,16 +376,50 @@ describe("registering a client", () => {
           scopeMap: { idm_all_persons: ["openid"] },
         },
       },
+      groups: { kb_admins: ["someone"] },
     });
-    await clientProvider.create!(declared(server.port));
+    const adopted = await clientProvider.create!(declared(server.port));
 
+    // Nothing a hand registered is taken away by the create: it may be how
+    // somebody signs in, and a create has no plan line that shows it going.
     const client = server.clients.get("kb")!;
     expect(server.seen.some((call) => call.path === "/v1/oauth2/_basic")).toBe(false);
+    expect(client.attrs.oauth2_rs_origin).toHaveLength(3);
+    expect(client.attrs.oauth2_allow_insecure_client_disable_pkce).toEqual(["true"]);
+    expect([...client.scopeMap.keys()].sort()).toEqual([
+      "uuid-group-idm_all_persons",
+      "uuid-group-kb_users",
+    ]);
+    expect(server.groups.get("kb_admins")?.members.sort()).toEqual([
+      "uuid-person-eetu",
+      "uuid-person-someone",
+    ]);
+
+    // What it kept is in the outputs, so the next plan shows it as an update…
+    const diff = await clientProvider.diff!("kb", adopted.outs!, declared(server.port));
+    expect(diff.changes).toBe(true);
+    // …and the update converges to the exact set.
+    await clientProvider.update!("kb", adopted.outs!, declared(server.port));
     expect(client.attrs.oauth2_rs_origin).toHaveLength(2);
     expect(client.attrs.oauth2_allow_insecure_client_disable_pkce).toBeUndefined();
-    // A scope map the declaration leaves out is gone, so who may sign in is the
-    // declared set and nothing a hand added.
     expect([...client.scopeMap.keys()]).toEqual(["uuid-group-kb_users"]);
+    expect(server.groups.get("kb_admins")?.members).toEqual(["uuid-person-eetu"]);
+  });
+
+  it("sets the short username only where the declaration states it", async () => {
+    server = await kanidm({});
+    const made = await clientProvider.create!(declared(server.port));
+    expect(server.clients.get("kb")!.attrs.oauth2_prefer_short_username).toBeUndefined();
+    await clientProvider.update!("kb", made.outs!, declared(server.port, { shortUsername: true }));
+    expect(server.clients.get("kb")!.attrs.oauth2_prefer_short_username).toEqual(["true"]);
+  });
+
+  it("sends a JSON content type only with a body", async () => {
+    server = await kanidm({});
+    await clientProvider.create!(declared(server.port));
+    for (const call of server.seen) {
+      expect(call.type === "application/json").toBe(call.body !== undefined);
+    }
   });
 
   it("fails by name when the vault's admin password is not the server's, and never says it", async () => {
@@ -454,6 +511,24 @@ describe("what a registration may declare", () => {
 });
 
 describe("the fleet's clients", () => {
+  it("refuses a group two clients both declare, which they would set in turn", () => {
+    const client = (name: string): ServiceSpec => ({
+      ...(SERVICES.find((entry) => entry.oidcClient !== undefined) as ServiceSpec),
+      name,
+      subdomain: name,
+      oidcClient: { redirectPaths: ["/cb"], groups: { shared: ["eetu"] } },
+    });
+    expect(() =>
+      oidcRegistrations([client("one"), client("two")], "kanidm", "example.test"),
+    ).toThrow(/two and one both declare the group shared/);
+  });
+
+  it("orders a registered client after the identity provider, whatever its auth", () => {
+    const gate = SERVICES.find((entry) => entry.name === "oauth2-proxy") as ServiceSpec;
+    const names = dependencyNames({ ...gate, dependsOn: undefined }, catalogOf(SERVICES));
+    expect(names).toContain(catalogOf(SERVICES).identity!.spec.name);
+  });
+
   const registrations = oidcRegistrations(SERVICES, "kanidm", "example.test");
 
   it("writes each secret to the field its entry reads", () => {

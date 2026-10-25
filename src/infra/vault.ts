@@ -4,7 +4,8 @@
  * The single place a plaintext secret exists in this repo's execution, and it
  * exists only in memory: the caller seals it for the target host immediately and
  * what leaves is ciphertext. Nothing writes a plaintext to disk, to state, or to
- * a log.
+ * a log; the one plaintext on a command line is `writeField`'s, for the length
+ * of the call, on the deploy machine.
  *
  * Called from inside the `SealedEnv` provider, which is why every native import
  * is inside a function body and why this module holds no state at all: a

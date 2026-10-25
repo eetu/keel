@@ -71,6 +71,8 @@ export type KanidmClientInputs = {
   scopeMap: Record<string, readonly string[]>;
   groups: Record<string, readonly string[]>;
   pkce: boolean;
+  /** Managed only when stated: see `OidcClientSpec`. */
+  shortUsername?: boolean;
   /** Where the secret the provider generates is written. */
   secret: { item: string; field: string };
 };
@@ -88,6 +90,7 @@ type Observed = {
   scopeMap: Record<string, string[]>;
   groups: Record<string, string[]>;
   pkce: boolean;
+  shortUsername?: boolean;
 };
 
 /**
@@ -97,6 +100,10 @@ type Observed = {
  */
 const HEALTH_ATTEMPTS = 30;
 const HEALTH_PAUSE_SECONDS = 2;
+
+/** How often, and how far apart, a recovery is tried while the container starts. */
+const RECOVER_ATTEMPTS = 5;
+const RECOVER_PAUSE_MS = 3000;
 
 /**
  * What every remote program starts with: the payload, the request helper, the
@@ -129,6 +136,8 @@ P = json.loads(base64.b64decode(PAYLOAD).decode("utf-8"))
 BASE = "https://127.0.0.1:%d" % P["port"]
 CONTEXT = ssl._create_unverified_context()
 SESSION = "X-KANIDM-AUTH-SESSION-ID"
+SHORT = "oauth2_prefer_short_username"
+PKCE = "oauth2_allow_insecure_client_disable_pkce"
 
 
 def fail(what):
@@ -138,7 +147,11 @@ def fail(what):
 
 
 def call(method, path, body=None, token=None, session=None, missing=False):
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    # A JSON content type on a request with no body is one the server may refuse
+    # as malformed rather than read as "no body", so it goes only with a body.
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = "Bearer " + token
     if session:
@@ -150,7 +163,7 @@ def call(method, path, body=None, token=None, session=None, missing=False):
             raw = answer.read()
             return answer.headers.get(SESSION), (json.loads(raw) if raw.strip() else None)
     except urllib.error.HTTPError as error:
-        if missing and error.code in (400, 404):
+        if missing and error.code == 404:
             return None, None
         fail("%s %s answered %d" % (method, path.split("?")[0], error.code))
 
@@ -161,9 +174,9 @@ def serving():
         if attempt:
             time.sleep(P["pause"])
         try:
-            call("GET", "/status")
+            urllib.request.urlopen(BASE + "/status", context=CONTEXT, timeout=10).read()
             return
-        except BaseException as error:
+        except Exception as error:
             seen = type(error).__name__
     fail("not answering /status after %ds (%s)" % (P["attempts"] * P["pause"], seen))
 
@@ -210,17 +223,11 @@ def observe(token):
         scope_map[plain(group, groups)] = sorted(re.findall(r'"([^"]+)"', scopes))
     members = {}
     for group, declared in want["groups"].items():
-        if uuid_of(token, "group", group) is None:
-            continue
-        people = {}
-        for person in declared:
-            found = uuid_of(token, "person", person)
-            if found:
-                people[found] = person
-        _, values = call("GET", "/v1/group/%s/_attr/member" % group, token=token, missing=True)
-        members[group] = sorted(plain(value, people) for value in (values or []))
+        found = members_of(token, group, declared)
+        if found is not None:
+            members[group] = found
     first = lambda name, default="": (attrs.get(name) or [default])[0]
-    return {
+    state = {
         "displayName": first("displayname"),
         "landing": first("oauth2_rs_origin_landing"),
         "redirects": sorted(attrs.get("oauth2_rs_origin") or []),
@@ -228,6 +235,22 @@ def observe(token):
         "groups": members,
         "pkce": first("oauth2_allow_insecure_client_disable_pkce", "false") != "true",
     }
+    if want.get("shortUsername") is not None:
+        state["shortUsername"] = first(SHORT, "false") == "true"
+    return state
+
+
+def members_of(token, group, declared):
+    # A group's members by plain name, or None when there is no such group.
+    if uuid_of(token, "group", group) is None:
+        return None
+    people = {}
+    for person in declared:
+        found = uuid_of(token, "person", person)
+        if found:
+            people[found] = person
+    _, values = call("GET", "/v1/group/%s/_attr/member" % group, token=token, missing=True)
+    return sorted(plain(value, people) for value in (values or []))
 
 
 def secret(token):
@@ -248,26 +271,43 @@ print(json.dumps({"state": state, "secretHash": digest}))
 
 /**
  * Converge the client and the groups it brings to the declaration, and hand the
- * secret back for the vault. A client the server already has is adopted: a
- * registration made by hand before this existed becomes this resource's.
+ * secret back with the state it left, for the vault and for the outputs.
+ *
+ * **A client or group the server already has, met by `create`, is adopted by
+ * adding to it**: the declared redirects, scope maps and members join what is
+ * there and nothing is taken away, and PKCE left off stays off. A registration
+ * made by hand may hold what somebody needs to sign in, and a create has no
+ * plan line that shows it going. What adoption kept is in the outputs, so the
+ * next plan shows its removal as an update, for a person to read before it
+ * happens; an update converges to the exact set.
  */
 const APPLY = `
 serving()
 token = login()
 want = P["client"]
-for group, members in want["groups"].items():
-    if uuid_of(token, "group", group) is None:
+adopting = P["adopting"]
+for group, declared in want["groups"].items():
+    present = members_of(token, group, declared)
+    if present is None:
         call("POST", "/v1/group", {"attrs": {"name": [group]}}, token=token)
+        present = []
+    members = sorted(set(declared) | set(present)) if adopting else declared
     if members:
         call("PUT", "/v1/group/%s/_attr/member" % group, members, token=token)
-    else:
-        call("DELETE", "/v1/group/%s/_attr/member" % group, token=token, missing=True)
+    elif present:
+        call("DELETE", "/v1/group/%s/_attr/member" % group, token=token)
 had = observe(token)
+merging = adopting and had is not None
+redirects = sorted(set(want["redirects"]) | set(had["redirects"])) if merging else want["redirects"]
 attrs = {
     "displayname": [want["displayName"]],
     "oauth2_rs_origin_landing": [want["landing"]],
-    "oauth2_rs_origin": want["redirects"],
+    "oauth2_rs_origin": redirects,
 }
+if want.get("shortUsername") is not None:
+    attrs[SHORT] = ["true" if want["shortUsername"] else "false"]
+if not want["pkce"]:
+    attrs[PKCE] = ["true"]
 if had is None:
     attrs["name"] = [want["id"]]
     call("POST", "/v1/oauth2/_basic", {"attrs": attrs}, token=token)
@@ -275,14 +315,12 @@ else:
     call("PATCH", "/v1/oauth2/" + want["id"], {"attrs": attrs}, token=token)
 for group, scopes in want["scopeMap"].items():
     call("POST", "/v1/oauth2/%s/_scopemap/%s" % (want["id"], group), scopes, token=token)
-for group in (had or {}).get("scopeMap", {}):
-    if group not in want["scopeMap"]:
-        call("DELETE", "/v1/oauth2/%s/_scopemap/%s" % (want["id"], group), token=token)
-pkce_attr = "oauth2_allow_insecure_client_disable_pkce"
-if not want["pkce"]:
-    call("PATCH", "/v1/oauth2/" + want["id"], {"attrs": {pkce_attr: ["true"]}}, token=token)
-elif had is not None and not had["pkce"]:
-    call("DELETE", "/v1/oauth2/%s/_attr/%s" % (want["id"], pkce_attr), token=token)
+if not merging:
+    for group in (had or {}).get("scopeMap", {}):
+        if group not in want["scopeMap"]:
+            call("DELETE", "/v1/oauth2/%s/_scopemap/%s" % (want["id"], group), token=token)
+    if want["pkce"] and had is not None and not had["pkce"]:
+        call("DELETE", "/v1/oauth2/%s/_attr/%s" % (want["id"], PKCE), token=token)
 print(json.dumps({"state": observe(token), "secret": secret(token)}))
 `;
 
@@ -307,7 +345,12 @@ async function adminPassword(props: KanidmClientInputs): Promise<string> {
 }
 
 /** One program on the board, its JSON answer back. The password rides on stdin. */
-async function speak<T>(props: KanidmClientInputs, operation: string, body: string): Promise<T> {
+async function speak<T>(
+  props: KanidmClientInputs,
+  operation: string,
+  body: string,
+  adopting = false,
+): Promise<T> {
   const { Buffer } = await import("node:buffer");
   const payload = Buffer.from(
     JSON.stringify({
@@ -324,7 +367,9 @@ async function speak<T>(props: KanidmClientInputs, operation: string, body: stri
         scopeMap: props.scopeMap,
         groups: props.groups,
         pkce: props.pkce,
+        ...(props.shortUsername === undefined ? {} : { shortUsername: props.shortUsername }),
       },
+      adopting,
     }),
     "utf8",
   ).toString("base64");
@@ -341,12 +386,30 @@ async function speak<T>(props: KanidmClientInputs, operation: string, body: stri
         `${result.stderr.trim() || "(no output)"}`,
     );
   }
-  return JSON.parse(result.stdout) as T;
+  try {
+    return JSON.parse(result.stdout) as T;
+  } catch {
+    // Not the parser's message: it quotes the text it choked on, which can hold
+    // the secret.
+    throw new Error(`the identity provider's board answered '${props.clientId}' with no JSON`);
+  }
 }
 
 async function digest(value: string): Promise<string> {
   const { createHash } = await import("node:crypto");
   return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * The same URL however it is written: the server stores a bare origin as
+ * `https://host/`, which the catalog writes `https://host`.
+ */
+function url(value: string): string {
+  try {
+    return new URL(value).href;
+  } catch {
+    return value;
+  }
 }
 
 /** Sorted throughout, so an order the server or the catalog happens to use is not a diff. */
@@ -357,11 +420,12 @@ function normalised(props: KanidmClientInputs | Observed): string {
       .map((key) => [key, [...map[key]].sort()]);
   return JSON.stringify([
     props.displayName,
-    props.landing,
-    [...props.redirects].sort(),
+    url(props.landing),
+    props.redirects.map(url).sort(),
     sortValues(props.scopeMap),
     sortValues(props.groups),
     props.pkce,
+    props.shortUsername ?? null,
   ]);
 }
 
@@ -377,19 +441,34 @@ function address(props: KanidmClientInputs): string {
   ]);
 }
 
-/** Apply, then hand the secret to the vault when it is not what the vault holds. */
-async function apply(inputs: KanidmClientInputs): Promise<ClientOuts> {
-  const answer = await speak<{ state: Observed; secret: string }>(inputs, "register", APPLY);
-  const held = await readField(inputs.vault, inputs.secret.item, inputs.secret.field);
-  if (held !== answer.secret) {
-    await writeField(inputs.vault, inputs.secret.item, inputs.secret.field, answer.secret);
+/**
+ * Apply, then hand the secret to the vault when it is not what the vault holds,
+ * and read it back: an edit of an item is a read-modify-write, and one lost to
+ * a concurrent edit would be a client whose secret is nowhere.
+ *
+ * The outputs are the state the server was left in rather than the inputs, so
+ * what an adoption kept is a diff the next plan shows.
+ */
+async function apply(inputs: KanidmClientInputs, adopting: boolean): Promise<ClientOuts> {
+  const answer = await speak<{ state: Observed; secret: string }>(
+    inputs,
+    "register",
+    APPLY,
+    adopting,
+  );
+  const { vault, secret } = inputs;
+  if ((await readField(vault, secret.item, secret.field)) !== answer.secret) {
+    await writeField(vault, secret.item, secret.field, answer.secret);
+    if ((await readField(vault, secret.item, secret.field)) !== answer.secret) {
+      throw new Error(`${secret.item}/${secret.field} does not hold what was written to it`);
+    }
   }
-  return { ...inputs, secretHash: await digest(answer.secret) };
+  return { ...inputs, ...answer.state, secretHash: await digest(answer.secret) };
 }
 
 export const clientProvider: pulumi.dynamic.ResourceProvider<KanidmClientInputs, ClientOuts> = {
   async create(inputs) {
-    return { id: inputs.clientId, outs: await apply(inputs) };
+    return { id: inputs.clientId, outs: await apply(inputs, true) };
   },
 
   async read(id, props) {
@@ -454,7 +533,7 @@ export const clientProvider: pulumi.dynamic.ResourceProvider<KanidmClientInputs,
   },
 
   async update(_id, _olds, news) {
-    return { outs: await apply(news) };
+    return { outs: await apply(news, false) };
   },
 
   async delete(_id, props) {
@@ -474,16 +553,28 @@ async function ensureAdmin(inputs: KanidmAdminInputs): Promise<void> {
   if ((await readField(inputs.vault, inputs.item, inputs.field)) !== "") return;
   if (!(await definitelyMissing(inputs))) {
     throw new Error(
-      `${inputs.item}/${inputs.field} could not be read — the vault is unreachable, and ` +
-        "recovering the account would reset a password that may be there",
+      `${inputs.item}/${inputs.field} could not be read — the vault is unreachable, or the ` +
+        "field is there and empty (delete it to have the account recovered); recovering it " +
+        "now would reset a password that may be held",
     );
   }
-  const result = await run(
+  // The container can be between a restart and running, which `podman exec`
+  // answers with an error rather than a wait.
+  let result = await run(
     inputs.host,
     ["podman", "exec", inputs.container, ...inputs.recover],
     undefined,
     inputs.sshArgs,
   );
+  for (let attempt = 1; attempt < RECOVER_ATTEMPTS && result.status !== 0; attempt++) {
+    await new Promise((wake) => setTimeout(wake, RECOVER_PAUSE_MS));
+    result = await run(
+      inputs.host,
+      ["podman", "exec", inputs.container, ...inputs.recover],
+      undefined,
+      inputs.sshArgs,
+    );
+  }
   const line = result.stdout
     .split("\n")
     .map((text) => text.trim())
@@ -501,6 +592,8 @@ async function ensureAdmin(inputs: KanidmAdminInputs): Promise<void> {
         `${result.stderr.trim() || "no JSON answer"}`,
     );
   }
+  // A write that fails here loses the password the server just set — which costs
+  // nothing but a run: the next one finds the field missing and recovers again.
   await writeField(inputs.vault, inputs.item, inputs.field, answer.output);
 }
 
