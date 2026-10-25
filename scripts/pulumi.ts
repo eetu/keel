@@ -7,11 +7,11 @@
  *   yarn deploy       -s <host>   # refresh once, then pulumi up --parallel 4
  *   yarn deploy:fast  -s <host>   # pulumi up --parallel 4
  *
- * Neither value may be typed into a committed script. `PULUMI_CONFIG_PASSPHRASE`
- * is one line of the gitignored `.env`, and the Cloudflare API token lives in the
- * 1Password vault whose *name* is a field of the gitignored
- * `src/config/installation.ts` — so the vault is imported here rather than
- * spelled, the same way every other reader of it works.
+ * Neither value may be typed into a committed script. Both live in the 1Password
+ * vault whose *name* is a field of the gitignored `src/config/installation.ts` —
+ * so the vault is imported here rather than spelled, the same way every other
+ * reader of it works. The passphrase may also come from `.env` or the
+ * environment; see `scripts/stack.ts`.
  *
  * `@pulumi/cloudflare` configures itself from `CLOUDFLARE_API_TOKEN` while the
  * program is being evaluated, which is `up` and `preview` alike. That is the
@@ -24,15 +24,14 @@
  * value.
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 
 import { CLOUDFLARE_FIELD, CLOUDFLARE_ITEM } from "../src/config/cloudflare";
 import { INSTALLATION } from "../src/config/installation";
 import { readField } from "../src/infra/vault";
-import { dotenv, repo } from "./dotenv";
 import { splitRefresh } from "./refreshOnce";
+import { pulumiEnv, runPulumi } from "./stack";
 
 /**
  * The `cloudflare` item is a login whose password field is the API token — the
@@ -91,22 +90,8 @@ if (token === "") {
   process.exit(1);
 }
 
-function pulumi(args: readonly string[]): Promise<number> {
-  return new Promise((resolve) => {
-    const child = spawn(fileURLToPath(new URL("node_modules/.bin/pulumi", repo)), args, {
-      cwd: fileURLToPath(repo),
-      stdio: "inherit",
-      env: { ...dotenv(), ...process.env, CLOUDFLARE_API_TOKEN: token },
-    });
-    child.on("error", (error) => {
-      console.error(`could not run the vendored pulumi: ${error.message}`);
-      resolve(1);
-    });
-    // A signal is not an exit code; reporting one as 0 would let a killed
-    // deploy look like a clean one to whatever ran this.
-    child.on("exit", (code, signal) => resolve(signal === null ? (code ?? 1) : 1));
-  });
-}
+const env = { ...(await pulumiEnv()), CLOUDFLARE_API_TOKEN: token };
+const pulumi = (args: readonly string[]): Promise<number> => runPulumi(args, env);
 
 const split = splitRefresh(process.argv.slice(2));
 if (split === null) {

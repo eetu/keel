@@ -141,9 +141,9 @@ yarn test:integration         # tier 3: the device providers against a booted im
 image/build.sh [tag]          # render + podman build --arch arm64 (default keel:latest)
 image/test.sh [tag]           # tier 2: bootc lint, unit syntax, generator profiles
 image/card.sh <host>          # build, shrink, add the Pi firmware and keel.conf, boot-test
-yarn preview -s <host>        # pulumi preview --refresh, vault- and .env-loaded
+yarn preview -s <host>        # pulumi preview --refresh, token and passphrase from the vault
 yarn preview:fast -s <host>   # the same without --refresh: reads nothing on the board
-yarn deploy -s <host>         # one refresh, then pulumi up; vault- and .env-loaded
+yarn deploy -s <host>         # one refresh, then pulumi up; the same two from the vault
 yarn deploy:fast -s <host>    # the same without --refresh: touches only what changed
 yarn bootstrap -s <host>      # the same, for a board whose coordinator is down
 yarn update                   # bump the local catalog pins Renovate cannot see, asking first
@@ -156,9 +156,11 @@ after a rebuild — needs the plain `deploy`. Any of them takes `--yes` to run
 unattended.
 
 The last two go through `scripts/pulumi.ts`, which warms the 1Password session,
-reads the Cloudflare token into `CLOUDFLARE_API_TOKEN` and loads `.env` before it
-spawns the vendored CLI — so both want a terminal 1Password can prompt, a
-preview included. `yarn pulumi <args>` is the CLI with `.env` and nothing else.
+reads the Cloudflare token into `CLOUDFLARE_API_TOKEN` and the stack passphrase
+(`scripts/stack.ts`: the environment, then `.env`, then the vault's `keel`
+item) before it spawns the vendored CLI — so both want a terminal 1Password can
+prompt, a preview included. `yarn pulumi <args>` is the CLI with the passphrase
+and nothing else.
 
 A fresh clone wants `installation.example.ts` and `services.local.example.ts`
 copied over their real names first; everything above needs the two present on
@@ -661,8 +663,7 @@ repository to keep abreast of somebody else's product. The zone is one
 per record, and a host with no public name looks it up not at all. The token is
 the `cloudflare` login item's password — the same field the proxy's DNS-01
 challenge reads — and it reaches the provider as `CLOUDFLARE_API_TOKEN`, put
-there by `scripts/pulumi.ts`, which reads the vault and loads `.env` before it
-spawns the CLI. That is the trade this provider is worth: it configures itself
+there by `scripts/pulumi.ts`, which reads the vault before it spawns the CLI. That is the trade this provider is worth: it configures itself
 while the program is being evaluated, which is `preview` as much as `up`, so
 **a preview of this stack now reads the vault** and wants a terminal 1Password
 can prompt. The zone the old repository populated is adopted by recreation
@@ -824,8 +825,12 @@ on, unbound's port, the module deny list, the journal cap, the fallback
 resolvers. `src/config/installation.ts` (one `INSTALLATION` object, the boards
 included) and `src/config/services.local.ts` are gitignored and hold non-secret
 configuration only — addresses, domains, image references, version pins.
-Syncthing carries both between the admin's machines, together with the local
-catalog's golden; `.stignore` is the whitelist that says so.
+The admin's chezmoi carries both between machines, together with the local
+catalog's golden and the `Pulumi.<stack>.yaml` files — so an edit to any of them
+here is followed by `chezmoi re-add`, which commits and pushes it. `state/` is
+a Syncthing folder of its own, shared with the board's Syncthing so a copy lives
+off the deploy machine; its `.stignore` (local to each peer) leaves out
+`.pulumi/backups` and `.pulumi/history`.
 
 Do not read secret values into context. Reading `/etc/secrets/*` off a host, or
 `op read`/`op item get` on a value, dumps plaintext into the transcript. Using a

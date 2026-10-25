@@ -129,8 +129,8 @@ yarn validate
 # 2. The passphrase every `pulumi` command in this file needs. The loader and
 #    the state directory are `Pulumi.yaml`'s own — `nodeargs` and `backend.url`
 #    — so the passphrase is the one thing left to supply, and `yarn pulumi`,
-#    `yarn preview` and `yarn deploy` load it from `.env` for the command they run.
-cp .env.example .env    # then fill in PULUMI_CONFIG_PASSPHRASE
+#    `yarn preview` and `yarn deploy` read it from the vault item `keel`'s
+#    password. Create that item; `.env` overrides it (see `.env.example`).
 
 # 3. A card. It writes your keel.conf onto the ESP itself, so the card that
 #    reaches Etcher already answers to that host — at the cost of a local image
@@ -591,15 +591,14 @@ The image is deliberately bare: it boots, hardens itself, brings up Unbound and
 answers ssh. Everything else arrives over Pulumi.
 
 State is self-managed and lives in the gitignored `state/` directory beside the
-repo, carried between the admin's machines by Syncthing (`.stignore` whitelists
-it together with the private config files, so one Syncthing folder moves
-everything a deploy needs). It holds no secret values — that is what sealing to
-the host's identity buys — so the passphrase protects stack config and nothing
-else. The loader and the state directory are `Pulumi.yaml`'s own — `nodeargs`
-and `backend.url` — so the passphrase is the one variable you supply by hand, and
-it lives in `.env` (gitignored, Syncthing-carried; copy `.env.example` and fill it
-in once). `yarn pulumi`, `yarn preview` and `yarn deploy` load it for the command
-they run:
+repo, carried between the admin's machines by Syncthing as a folder of its own —
+`.pulumi/backups` and `.pulumi/history` are a local audit trail many times the
+size of the live checkpoints, and worth leaving out of it. The gitignored
+configuration files travel with the admin's dotfiles. The passphrase protects the generated keys and tokens the state
+holds. The loader and the state directory are `Pulumi.yaml`'s own — `nodeargs`
+and `backend.url` — so the passphrase is the one value left, and `yarn pulumi`,
+`yarn preview` and `yarn deploy` read it from the vault item `keel`'s password
+for the command they run:
 
 ```fish
 yarn pulumi stack init raspi        # once
@@ -610,13 +609,8 @@ The other variable a deploy needs comes out of the vault rather than from you:
 `CLOUDFLARE_API_TOKEN`, which is why `yarn preview` and `yarn deploy` both want a
 terminal 1Password can prompt.
 
-The passphrase can stay out of `.env` — leave the line empty there and export it
-per session instead; what loads the file never overrides a variable already set,
-only one that is missing:
-
-```fish
-set -x PULUMI_CONFIG_PASSPHRASE (op read op://<your vault>/keel/password)
-```
+An exported `PULUMI_CONFIG_PASSPHRASE` wins over `.env`, and `.env` over the
+vault, so a machine with no vault copies `.env.example` and fills it in.
 
 Syncthing is what makes the state portable, and it is also the constraint: run
 `pulumi` from one machine at a time and let the folder sync before switching —
