@@ -593,7 +593,7 @@ answers ssh. Everything else arrives over Pulumi.
 State is self-managed and lives in the gitignored `state/` directory beside the
 repo, carried between the admin's machines by Syncthing as a folder of its own —
 `.pulumi/backups` and `.pulumi/history` are a local audit trail many times the
-size of the live checkpoints, and worth leaving out of it. The gitignored
+size of the live checkpoints, and the tracked `state/.stignore` leaves them out. The gitignored
 configuration files travel with the admin's dotfiles. The passphrase protects the generated keys and tokens the state
 holds. The loader and the state directory are `Pulumi.yaml`'s own — `nodeargs`
 and `backend.url` — so the passphrase is the one value left, and `yarn pulumi`,

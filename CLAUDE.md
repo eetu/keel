@@ -829,8 +829,10 @@ The admin's chezmoi carries both between machines, together with the local
 catalog's golden and the `Pulumi.<stack>.yaml` files — so an edit to any of them
 here is followed by `chezmoi re-add`, which commits and pushes it. `state/` is
 a Syncthing folder of its own, shared with the board's Syncthing so a copy lives
-off the deploy machine; its `.stignore` (local to each peer) leaves out
-`.pulumi/backups` and `.pulumi/history`.
+off the deploy machine; its `.stignore`, tracked in git because Syncthing does
+not sync it, leaves out `.pulumi/backups` and `.pulumi/history`. The folder's
+path is `state/` and never the clone's root — a share rooted at the repository
+publishes the whole working tree into every peer's state directory.
 
 Do not read secret values into context. Reading `/etc/secrets/*` off a host, or
 `op read`/`op item get` on a value, dumps plaintext into the transcript. Using a
