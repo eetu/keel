@@ -1,0 +1,10 @@
+// Syncthing reads this from the root of the `state/` folder; git carries it,
+// because Syncthing does not sync it between peers.
+//
+// Pulumi's per-update audit trail, many times the size of the live checkpoints
+// and growing with every run. Only `pulumi stack history` and manual recovery
+// read it; stacks/ keeps the previous checkpoint as *.json.bak. locks/ stays
+// synced so a run on one machine holds off one on another.
+/.pulumi/backups
+/.pulumi/history
+(?d).DS_Store
