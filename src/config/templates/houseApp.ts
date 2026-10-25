@@ -77,7 +77,12 @@
 
 import type { SecretRef, ServiceSetup, ServiceSpec, SetupContext } from "../spec";
 import type { ServiceMemory } from "../types";
-import { OIDC_VARIABLES, oidcClientEnv, oidcClientSecretRef } from "./oidcClient";
+import {
+  OIDC_CALLBACK_PATH,
+  OIDC_VARIABLES,
+  oidcClientEnv,
+  oidcClientSecretRef,
+} from "./oidcClient";
 
 /** Where the data directory is mounted inside the container. */
 const CONTAINER_DATA_DIR = "/data";
@@ -322,6 +327,9 @@ export function houseApp(options: HouseAppOptions): ServiceSpec {
     // bring back, so an application that keeps one is in the snapshot set and one
     // that keeps nothing has nothing to snapshot.
     backup: dataDir !== null,
+    // A client of the issuer is registered with it, at the one callback path the
+    // house's applications share.
+    ...(auth === "oidc" ? { oidcClient: { redirectPaths: [OIDC_CALLBACK_PATH] } } : {}),
     ...overrides,
     setup: auth === "oidc" || setup !== undefined ? composed : undefined,
   };

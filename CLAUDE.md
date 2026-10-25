@@ -508,9 +508,9 @@ hub's superuser, upserts the account, assigns it to every system, **generates th
 password inside the call and seals it for the host in the same one**. So it is in
 no vault, in no state file and in nobody's clipboard — it lands as
 `/etc/secrets/<name>.metrics.env.age` and reaches the container as a second
-`EnvironmentFile=`. That follows the rule rather than bending it: keel makes no
-vault writes, so a generated secret that had to be stored would have needed one,
-and a password no person ever types loses nothing by nobody knowing it. `read`
+`EnvironmentFile=`. That follows the rule rather than bending it: a password
+this deploy generates and no person ever types loses nothing by nobody knowing
+it, so it needs no vault write. `read`
 asks the hub whether the account still exists — gone in its UI is gone here, and
 the next deploy creates it again with a fresh password — and never re-generates,
 because a rotation on every refresh would restart the consumer for no change. A
@@ -524,7 +524,7 @@ creates the owner and hands back a plaintext access token — shown exactly once
 `BootstrapAccount` (`src/infra/providers/netbirdAccount.ts`) makes that call from
 the board, draws the owner's password inside it, and returns the token as a
 **secret output**. That is the one credential in this repository that lives in
-Pulumi state: the server minted it, keel makes no vault writes, and the
+Pulumi state: the server minted it, nothing else reads it, and the
 alternative is a person pasting something before every run. The owner's password
 is kept beside it because the token expires at the server's 365-day cap and the
 local login is the only way back into the account that can mint another — an SSO
@@ -554,8 +554,36 @@ gives everyone who has ever signed in a subject the coordinator has never seen �
 which is a brand new, empty account each. So it is matched by name, corrected with
 a PUT on the id that is already there, and it outlives the stack. Its client
 secret is the identity provider's to generate: `kanidm/netbird_client_secret` is
-registered by hand exactly as `kanidm/oauth2_proxy_client_secret` is, and an empty
-field fails by name.
+still registered by hand — Dex's redirect is not a path under the coordinator's
+vhost — and an empty field fails by name.
+
+**The identity provider registers its clients, and writes their secrets.** An
+entry's `oidcClient` is registered by the board that runs Kanidm —
+`KanidmClient` (`src/infra/providers/kanidmClient.ts`), one per client in the
+fleet, over ssh to the server's loopback, side by side — as the exact set
+it declares: its redirects under the entry's own origin, who may sign in, the
+members of the groups it brings, whether it does PKCE and, where it says so,
+whether `preferred_username` is the plain name. Kanidm generates a client's
+secret and nothing can set it, so the registration writes it into the vault field
+the client already reads, `kanidm/<client id>_client_secret`, reads it back, and
+hands its hash to the client's `SealedEnv` as `revision` — an input, so it is the
+edge that orders the read after the write and re-seals in the run that wrote a
+new one. **These, and the admin password below, are the only vault writes keel
+makes**: values a server minted, written where every reader already looks, with
+a hash in state and never the value. The write is `op item edit`'s assignment
+form, so the value is on the deploy machine's command line for the length of
+the call, and writes to one item take turns under a lock on that machine, since an edit is a read-modify-write. **A client met by `create` that the server already has is adopted by
+adding to it** — redirects, scope maps and members join what is there, and PKCE
+left off stays off — because a create has no plan line that shows what it would
+take away; what it kept is in its outputs, so the next plan shows the removal as
+an update for a person to read. A deleted client's vault field stays.
+`KanidmAdmin` recovers `idm_admin` with `kanidmd scripting recover-account` when
+the vault definitely has no password for it — asked with `op item get`, because
+`readField`'s "" is also an unreachable vault, and resetting a password nobody
+then holds is the one outcome worse than a failed run. `read` asks the server for
+the client and compares its secret with the vault's by hash, so a redirect added
+in the web UI is drift, and a secret reset there is a client the next `up`
+adopts, writes into the vault and re-seals for the service, in that one run.
 
 **The mesh's own state is a bridged provider's, not a client written here.**
 Everything behind the coordinator's API — the account settings, the groups, the
@@ -803,7 +831,14 @@ Pulumi refuses to redraw it and removing the flag is the decision.
 The second is the coordinator's own access token and the owner password beside
 it, minted and drawn by `BootstrapAccount` and held as `pulumi.secret` outputs —
 under the same stack passphrase, for the reason above: the server issues the
-token once and there is no vault write to park it in.
+token once and only the deploy reads it.
+
+**What keel writes into the vault** is what an identity provider mints for a
+client, and nothing else: each OAuth2 client's secret and the administrative
+password the registrations sign in with (see Rules, on the identity provider).
+They go where every reader already looks, since a client on another board reads
+its secret from there, and state holds a hash of a client secret, never the
+value.
 
 **Rotating one is `yarn deploy`.** The vault is not a resource input, so
 a bare `up` compares the inputs it has — the item and the field names — and finds
@@ -1146,19 +1181,18 @@ start` on it is a no-op, and a name list written after boot would sit
 - **Interpolating a multi-line block into an indented template literal** gives the
   first line a different indentation from the rest. Compose computed multi-line
   output line by line instead — see `src/render/selftest.ts`.
-- **A fresh installation's first `up` stops at the one vault field that cannot
-  exist yet.** `kanidm/oauth2_proxy_client_secret` is issued when the gate is
-  registered as a client of a _running_ Kanidm, so the resource that seals the
-  gate's environment fails by name — `kanidm/oauth2_proxy_client_secret is empty
-or unreadable`. Where in the run it fails is deliberate: **a `SealedEnv`
-  carries the same dependencies its service does**, so the read happens after
-  Kanidm is up rather than in the first seconds. Without that edge
-  it is a root of the graph — Pulumi stops an update at the first error, so the
-  read would fail immediately and kill the run that was going to make the field
-  answerable, which is a bootstrap with no fixed point. Register the client
-  against the Kanidm that run brought up, put the secret in the vault, and run
-  `up` again. That is the whole bootstrap: there is no staged subset, and the
-  ordering a subset stood in for is in the graph.
+- **A field the run itself writes is read after the resource that writes it.**
+  `kanidm/oauth2_proxy_client_secret` exists only once the gate is registered
+  with a _running_ Kanidm, so **a `SealedEnv` carries the same dependencies its
+  service does, and its client's registration as an input** (`revision`): the
+  read happens after the write rather than in the first seconds, and an entry
+  with an `oidcClient` is ordered after the identity provider whatever its
+  `auth`, so the registration exists when it is reached. Without that edge it is a root of the
+  graph — Pulumi stops an update at the first error, so the read would fail
+  immediately and kill the run that was going to write the field, which is a
+  bootstrap with no fixed point. A client on another board has no such edge: its
+  board is deployed after the identity provider's, and until then its read fails
+  by name.
 - **Pulumi previews by evaluating the program.** Any side effect in the program
   fires on `pulumi preview`. Generated secrets, registry lookups and prompts must
   live behind a resource, never at module scope — which is what `ImageDigest` and

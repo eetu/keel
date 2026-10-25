@@ -1,10 +1,11 @@
 /**
- * Reading secrets out of 1Password.
+ * Reading secrets out of 1Password, and writing the ones a server generates.
  *
  * The single place a plaintext secret exists in this repo's execution, and it
  * exists only in memory: the caller seals it for the target host immediately and
  * what leaves is ciphertext. Nothing writes a plaintext to disk, to state, or to
- * a log.
+ * a log; the one plaintext on a command line is `writeField`'s, for the length
+ * of the call, on the deploy machine.
  *
  * Called from inside the `SealedEnv` provider, which is why every native import
  * is inside a function body and why this module holds no state at all: a
@@ -38,6 +39,130 @@ export async function readField(vault: string, item: string, field: string): Pro
     } catch (error) {
       const said = String((error as { stderr?: string }).stderr ?? "");
       if (DEFINITE.test(said) || pauseMs > 16000) return "";
+      await new Promise((wake) => setTimeout(wake, pauseMs));
+    }
+  }
+}
+
+/**
+ * Writes a field the deploy is the source of: a credential a server generates
+ * and nobody can set — an OAuth2 client's secret, the password recovering an
+ * administrative account printed. The item is created when it is not there.
+ *
+ * The value rides as an argument, in `op item edit`'s assignment form, which
+ * changes one field without restating the item: it is in this machine's process
+ * list for the length of the call and written nowhere. A failure names the
+ * field and what `op` said, with the value scrubbed from that, never the
+ * command line. Retried as a read is, since the same Touch ID prompt is what it
+ * races. One edit of an item at a time, under a lock on this machine: an edit is
+ * a read-modify-write, and two resources writing fields of one item at once can
+ * each undo the other's.
+ */
+export async function writeField(
+  vault: string,
+  item: string,
+  field: string,
+  value: string,
+): Promise<void> {
+  await locked(`${vault}-${item}`, () => edit(vault, item, field, value));
+}
+
+/**
+ * Whether `op` says the field is not on the item, or the item is not there at
+ * all — which `readField`'s "" cannot tell from a vault it could not reach.
+ * Labels only: the values are in the JSON `op` answers with and go no further.
+ */
+export async function fieldMissing(vault: string, item: string, field: string): Promise<boolean> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  try {
+    const { stdout } = await exec("op", [
+      "item",
+      "get",
+      item,
+      "--vault",
+      vault,
+      "--format",
+      "json",
+    ]);
+    const fields = (JSON.parse(stdout) as { fields?: { label?: string }[] }).fields ?? [];
+    return !fields.some((entry) => entry.label === field);
+  } catch (error) {
+    return /isn't an item/i.test(String((error as { stderr?: string }).stderr ?? ""));
+  }
+}
+
+/**
+ * A lock directory in the temporary directory, held while `run` does. `mkdir`
+ * either makes it or finds it, atomically, whichever process asks; one older
+ * than any edit takes is a run that died holding it.
+ */
+async function locked<T>(name: string, run: () => Promise<T>): Promise<T> {
+  const { mkdir, rmdir, stat } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = `${tmpdir()}/keel-vault-${name.replace(/[^A-Za-z0-9_-]/g, "_")}.lock`;
+  for (;;) {
+    try {
+      await mkdir(path);
+      break;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "EEXIST") throw error;
+      const since = await stat(path).then(
+        (found) => Date.now() - found.mtimeMs,
+        () => 0,
+      );
+      if (since > 300_000) await rmdir(path).catch(() => undefined);
+      else await new Promise((wake) => setTimeout(wake, 250));
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    await rmdir(path).catch(() => undefined);
+  }
+}
+
+async function edit(vault: string, item: string, field: string, value: string): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  const assignment = `${field}[password]=${value}`;
+  // What `op` said, without the value should it quote the assignment back.
+  const stderr = (error: unknown): string =>
+    (value === ""
+      ? String((error as { stderr?: string }).stderr ?? "")
+      : String((error as { stderr?: string }).stderr ?? "")
+          .split(value)
+          .join("***")
+    ).trim();
+  for (let pauseMs = 2000; ; pauseMs *= 2) {
+    try {
+      await exec("op", ["item", "edit", item, "--vault", vault, assignment]);
+      return;
+    } catch (error) {
+      const said = stderr(error);
+      if (/isn't an item/i.test(said)) {
+        try {
+          await exec("op", [
+            "item",
+            "create",
+            "--vault",
+            vault,
+            "--category",
+            "Secure Note",
+            "--title",
+            item,
+            assignment,
+          ]);
+          return;
+        } catch (created) {
+          throw new Error(`${item}/${field}: the item could not be created: ${stderr(created)}`);
+        }
+      }
+      if (DEFINITE.test(said) || pauseMs > 16000) {
+        throw new Error(`${item}/${field} could not be written: ${said || "op failed"}`);
+      }
       await new Promise((wake) => setTimeout(wake, pauseMs));
     }
   }

@@ -98,7 +98,12 @@ export async function run(
 
   const attempt = (): Promise<Result> =>
     new Promise<Result>((resolve) => {
-      const child = spawn("ssh", [...sshArgs, host, "sudo", ...argv], {
+      // Pulumi starts this provider in a process group of its own, in the
+      // background of the deploy's terminal, so an ssh that opens /dev/tty to
+      // ask something — an unknown host key, a passphrase — is stopped by
+      // SIGTTIN along with the whole group, and the run hangs with no error.
+      // BatchMode turns every such question into exit 255, thrown below.
+      const child = spawn("ssh", ["-o", "BatchMode=yes", ...sshArgs, host, "sudo", ...argv], {
         stdio: ["pipe", "pipe", "pipe"],
       });
 

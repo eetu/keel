@@ -151,13 +151,9 @@ ssh <admin>@<host> sudo age-keygen -y /etc/keel/age.key
 
 # 5. Everything the host runs, in dependency order — the resolver,
 #    the proxy behind it, the certificate its reader waits for, the issuer, the
-#    gate. This run stops at the one vault field that cannot exist yet: the
-#    gate's OIDC client secret is issued by a *running* Kanidm, which this run is
-#    what brings up.
+#    clients it registers, the gate. Kanidm's admin password and every client's
+#    secret are written into the vault by this run, as the server issues them.
 yarn pulumi stack init <host>
-yarn deploy -s <host>
-# register oauth2-proxy as a client with Kanidm's own CLI, and put the secret it
-# prints into the vault as kanidm/oauth2_proxy_client_secret
 yarn deploy -s <host>
 ```
 
@@ -175,7 +171,7 @@ keeps out. One row per field the example catalog reads, in the vault
 | ----------------------------------- | --------------------------------------------------------------------- |
 | `cloudflare/password`               | Traefik's DNS-01 challenge, and the A record behind every public name |
 | `oauth2-proxy/cookie_secret`        | The gate's session cookie — 32 random bytes, base64                   |
-| `kanidm/oauth2_proxy_client_secret` | The gate's OIDC client secret, the one Kanidm issues on register      |
+| `kanidm/oauth2_proxy_client_secret` | The gate's OIDC client secret — written by the deploy, not by you     |
 | `vaultwarden/admin_token`           | Vaultwarden's admin page                                              |
 | `vaultwarden/smtp_email`            | The relay login, which is also the From address                       |
 | `vaultwarden/smtp_password`         | That login's password                                                 |
@@ -191,13 +187,22 @@ behind every secret variable an entry reads — names only, since it never opens
 the vault — so the row for any entry, this table's or your own, is one command
 away rather than something to work out from the source.
 
-**Why step 5 is two runs.** Every field in that table but one is yours to write
-into the vault before you start. `kanidm/oauth2_proxy_client_secret` is the one
-that cannot exist yet: Kanidm issues it when the gate is registered as a client of
-it. So the first run stops on the gate: the read of that field fails by name.
-Register the client against Kanidm, put the secret in the vault, and the second
-run finishes. Nothing is staged by hand: the host's entry says what it runs —
-the whole catalog unless it lists a subset — and the graph says in what order.
+**What the deploy writes into the vault.** Every field in that table but one is
+yours to write before you start. `kanidm/oauth2_proxy_client_secret` is Kanidm's
+to issue, and nothing can set it from outside: the run registers the gate as a
+client once Kanidm answers, and writes the secret it generated into that field
+before the gate's environment is sealed — so one run brings the login up. Every
+entry with an `oidcClient` is registered the same way, on the board that runs
+Kanidm, its secret written to `kanidm/<client id>_client_secret`; a client on
+another board reads it there once that board has been deployed. A client
+Kanidm already has — registered by hand before — is adopted by adding to it,
+and the next plan shows what the declaration would remove, for you to read
+before it does.
+`kanidm/idm_admin_password`, the account the registrations sign in as, is the
+deploy's too: when the vault has none, the run resets it with Kanidm's own
+`recover-account` and writes what that printed. Nothing is staged by hand: the
+host's entry says what it runs — the whole catalog unless it lists a subset —
+and the graph says in what order.
 
 How much of the fleet is standing when it stops is not guaranteed, and it does
 not need to be. `pulumi up` halts on the first error, and the gate's vault read
@@ -241,16 +246,7 @@ See [flashing a card](#flashing-a-card-and-bringing-a-host-up) for the whole of
 steps 2 to 5 at length: what `card.sh` does, why the state lives where it does,
 and what to look at when a board does not come up.
 
-**What is not there yet.** One thing is still manual, and it is not hidden by a
-resource that pretends otherwise:
-
-- **OAuth2 clients in Kanidm.** Register `oauth2-proxy` as a client with Kanidm's
-  own CLI and put the secret it generates into the vault, where the gate's entry
-  reads it. Nothing registers it for you, which is what makes step 5 two passes —
-  and the same is true of every service that runs a client of its own, so an
-  `auth: "oidc"` entry needs the registration before its first login.
-
-See [Roadmap](#roadmap).
+See [Roadmap](#roadmap) for what is not there yet.
 
 ### Adding an application of your own
 
@@ -638,14 +634,9 @@ ssh raspi
 ssh raspi "age-keygen | sudo install -D -m 600 /dev/stdin /etc/keel/age.key"
 ssh raspi sudo age-keygen -y /etc/keel/age.key
 
-# 3. Everything the host runs, in dependency order. On a fresh
-#    installation this stops on the gate's sealed environment: the OAuth2 client
-#    secret is issued by a running Kanidm, which this run is what brings up.
+# 3. Everything the host runs, in dependency order, the OAuth2 clients Kanidm
+#    registers and the secrets it writes into the vault included.
 yarn pulumi stack select raspi
-yarn deploy -s raspi
-
-# 4. Register oauth2-proxy as a client of that Kanidm, put the secret it prints
-#    into the vault as kanidm/oauth2_proxy_client_secret, and finish.
 yarn deploy -s raspi
 ```
 
@@ -848,14 +839,10 @@ multi-host is modelled throughout — one stack per host, a profile per board's 
 a service list per host — but exercised by one host, which is the classic way a
 second one turns out to be a rewrite.
 
-**OIDC client registration.** Registering `oauth2-proxy` with Kanidm is manual
-today, which makes the login the one part of a fresh install that a `pulumi up`
-does not bring up. What is missing is a dynamic provider with a `read` that asks
-the issuer what the client currently looks like, and the generated secret landing
-in the vault where the gate's entry already reads it. What it needs of the
-identity role — the provider's REST root, the administrative account and the vault
-field holding its password, named and never valued — it states on `IdentityRole`
-when it lands, so the role carries what has a reader and nothing ahead of one.
+**The mesh coordinator's client.** NetBird federates Kanidm through its embedded
+Dex, and its client is still registered by hand: its redirect is Dex's rather than
+a path under its own vhost, and a wrong one is a mesh nobody can sign into. It
+takes an `oidcClient` once that redirect is read off a live login.
 
 **An installation object whose halves are optional.** `Installation` no longer
 grows with the catalog — a field there is what the fleet or several services need,
