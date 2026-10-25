@@ -255,7 +255,8 @@ export type OidcClientSpec = {
    * Whether `preferred_username` carries the plain name rather than the SPN
    * (`alice` rather than `alice@idm.example`). Left as the provider has it
    * unless stated, since a client that keys its users on that claim would see
-   * every one of them as somebody new.
+   * every one of them as somebody new. Dropping it from a declaration leaves
+   * the server's value as it is.
    */
   shortUsername?: boolean;
 };
@@ -1833,7 +1834,16 @@ export function oidcRegistrations(
   // A group is one client's: two that both declared members for it would set
   // them in turn on every run, each undoing the other.
   const owners = new Map<string, string>();
+  const ids = new Map<string, string>();
   for (const spec of specs) {
+    if (spec.oidcClient === undefined) continue;
+    // One registration per id: two would take turns at one client and one field.
+    const id = spec.oidcClient.id ?? spec.name;
+    const holder = ids.get(id);
+    if (holder !== undefined) {
+      throw new Error(`${spec.name} and ${holder} both register the client ${id}`);
+    }
+    ids.set(id, spec.name);
     for (const group of Object.keys(spec.oidcClient?.groups ?? {})) {
       const other = owners.get(group);
       if (other !== undefined) {

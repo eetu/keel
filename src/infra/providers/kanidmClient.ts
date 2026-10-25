@@ -27,9 +27,11 @@
  * JSON line back; the password rides in on that stdin, base64 inside the
  * program text, never an argument and never a diagnostic.
  *
- * **A registration is the exact set it declares**: the redirect URLs, who may
- * sign in (the scope map), the members of the groups it brings and whether it
- * does PKCE. `read` asks the server for each, so a redirect added in the web UI
+ * **A registration is the exact set it declares** once it is this resource's:
+ * the redirect URLs, who may sign in (the scope map), the members of the groups
+ * it brings and whether it does PKCE. A client the server already had when it
+ * was first declared is adopted by adding to it (see `APPLY`), and the next
+ * plan shows what converging would take away. `read` asks the server for each, so a redirect added in the web UI
  * or a scope map changed with the CLI is drift on a refresh, and a secret reset
  * there is too — the vault's copy is compared with the server's by hash, and a
  * client whose secret is no longer the vault's is reported absent so the next
@@ -39,7 +41,7 @@
 import * as pulumi from "@pulumi/pulumi";
 
 import { run } from "../ssh";
-import { readField, writeField } from "../vault";
+import { fieldMissing, readField, writeField } from "../vault";
 import type { Args } from "./inputs";
 
 export type KanidmAdminInputs = {
@@ -314,6 +316,8 @@ if had is None:
 else:
     call("PATCH", "/v1/oauth2/" + want["id"], {"attrs": attrs}, token=token)
 for group, scopes in want["scopeMap"].items():
+    if merging:
+        scopes = sorted(set(scopes) | set(had["scopeMap"].get(group, [])))
     call("POST", "/v1/oauth2/%s/_scopemap/%s" % (want["id"], group), scopes, token=token)
 if not merging:
     for group in (had or {}).get("scopeMap", {}):
@@ -481,8 +485,12 @@ export const clientProvider: pulumi.dynamic.ResourceProvider<KanidmClientInputs,
     if (found.state === null) return { id: undefined };
     // A secret reset on the server, or a vault field edited by hand, is a client
     // that is not the one this declared: absent, so the next `up` adopts it and
-    // writes the secret that is current.
+    // writes the secret that is current. An unreachable vault is neither, and
+    // dropping a live client from state for it would be a refresh that lies.
     const held = await readField(props.vault, props.secret.item, props.secret.field);
+    if (held === "" && !(await fieldMissing(props.vault, props.secret.item, props.secret.field))) {
+      throw new Error(`${props.secret.item}/${props.secret.field} could not be read`);
+    }
     if ((await digest(held)) !== found.secretHash) return { id: undefined };
     return { id, props: { ...props, ...found.state, secretHash: found.secretHash } };
   },
@@ -551,7 +559,7 @@ export const clientProvider: pulumi.dynamic.ResourceProvider<KanidmClientInputs,
  */
 async function ensureAdmin(inputs: KanidmAdminInputs): Promise<void> {
   if ((await readField(inputs.vault, inputs.item, inputs.field)) !== "") return;
-  if (!(await definitelyMissing(inputs))) {
+  if (!(await fieldMissing(inputs.vault, inputs.item, inputs.field))) {
     throw new Error(
       `${inputs.item}/${inputs.field} could not be read — the vault is unreachable, or the ` +
         "field is there and empty (delete it to have the account recovered); recovering it " +
@@ -595,29 +603,6 @@ async function ensureAdmin(inputs: KanidmAdminInputs): Promise<void> {
   // A write that fails here loses the password the server just set — which costs
   // nothing but a run: the next one finds the field missing and recovers again.
   await writeField(inputs.vault, inputs.item, inputs.field, answer.output);
-}
-
-/** Whether `op` says the field is not on the item, or the item is not there at all. */
-async function definitelyMissing(inputs: KanidmAdminInputs): Promise<boolean> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const exec = promisify(execFile);
-  try {
-    const { stdout } = await exec("op", [
-      "item",
-      "get",
-      inputs.item,
-      "--vault",
-      inputs.vault,
-      "--format",
-      "json",
-    ]);
-    // Labels only: the values are in this JSON and go no further than this line.
-    const fields = (JSON.parse(stdout) as { fields?: { label?: string }[] }).fields ?? [];
-    return !fields.some((field) => field.label === inputs.field);
-  } catch (error) {
-    return /isn't an item/i.test(String((error as { stderr?: string }).stderr ?? ""));
-  }
 }
 
 export const adminProvider: pulumi.dynamic.ResourceProvider<KanidmAdminInputs, KanidmAdminInputs> =

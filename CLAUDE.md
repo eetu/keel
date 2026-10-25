@@ -560,7 +560,7 @@ vhost — and an empty field fails by name.
 **The identity provider registers its clients, and writes their secrets.** An
 entry's `oidcClient` is registered by the board that runs Kanidm —
 `KanidmClient` (`src/infra/providers/kanidmClient.ts`), one per client in the
-fleet, over ssh to the server's loopback, one after another — as the exact set
+fleet, over ssh to the server's loopback, side by side — as the exact set
 it declares: its redirects under the entry's own origin, who may sign in, the
 members of the groups it brings, whether it does PKCE and, where it says so,
 whether `preferred_username` is the plain name. Kanidm generates a client's
@@ -572,7 +572,7 @@ new one. **These, and the admin password below, are the only vault writes keel
 makes**: values a server minted, written where every reader already looks, with
 a hash in state and never the value. The write is `op item edit`'s assignment
 form, so the value is on the deploy machine's command line for the length of
-the call. **A client met by `create` that the server already has is adopted by
+the call, and writes to one item take turns under a lock on that machine, since an edit is a read-modify-write. **A client met by `create` that the server already has is adopted by
 adding to it** — redirects, scope maps and members join what is there, and PKCE
 left off stays off — because a create has no plan line that shows what it would
 take away; what it kept is in its outputs, so the next plan shows the removal as

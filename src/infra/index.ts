@@ -538,9 +538,6 @@ for (const spec of ordered) {
       },
       { dependsOn: [service] },
     );
-    // One at a time: each writes a field on the same vault item, and an edit of
-    // an item is a read-modify-write that a concurrent one can undo.
-    let previous: pulumi.Resource = admin;
     const fleetSpecs = fleetServices(INSTALLATION, SERVICES);
     for (const client of oidcRegistrations(fleetSpecs, identityItem, INSTALLATION.network.domain)) {
       const registration = new KanidmClient(
@@ -565,10 +562,11 @@ for (const spec of ordered) {
           ...(client.shortUsername === undefined ? {} : { shortUsername: client.shortUsername }),
           secret: client.secret,
         },
-        { dependsOn: [previous] },
+        // Side by side: one that fails stops its own service and no other.
+        // Their vault writes take turns under `writeField`'s lock.
+        { dependsOn: [admin] },
       );
       registrations.set(client.service, registration);
-      previous = registration;
     }
   }
 }

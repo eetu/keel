@@ -52,8 +52,11 @@ export async function readField(vault: string, item: string, field: string): Pro
  * The value rides as an argument, in `op item edit`'s assignment form, which
  * changes one field without restating the item: it is in this machine's process
  * list for the length of the call and written nowhere. A failure names the
- * field and what `op` said, never the command line, which holds the value.
- * Retried as a read is, since the same Touch ID prompt is what it races.
+ * field and what `op` said, with the value scrubbed from that, never the
+ * command line. Retried as a read is, since the same Touch ID prompt is what it
+ * races. One edit of an item at a time, under a lock on this machine: an edit is
+ * a read-modify-write, and two resources writing fields of one item at once can
+ * each undo the other's.
  */
 export async function writeField(
   vault: string,
@@ -61,11 +64,78 @@ export async function writeField(
   field: string,
   value: string,
 ): Promise<void> {
+  await locked(`${vault}-${item}`, () => edit(vault, item, field, value));
+}
+
+/**
+ * Whether `op` says the field is not on the item, or the item is not there at
+ * all — which `readField`'s "" cannot tell from a vault it could not reach.
+ * Labels only: the values are in the JSON `op` answers with and go no further.
+ */
+export async function fieldMissing(vault: string, item: string, field: string): Promise<boolean> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  try {
+    const { stdout } = await exec("op", [
+      "item",
+      "get",
+      item,
+      "--vault",
+      vault,
+      "--format",
+      "json",
+    ]);
+    const fields = (JSON.parse(stdout) as { fields?: { label?: string }[] }).fields ?? [];
+    return !fields.some((entry) => entry.label === field);
+  } catch (error) {
+    return /isn't an item/i.test(String((error as { stderr?: string }).stderr ?? ""));
+  }
+}
+
+/**
+ * A lock directory in the temporary directory, held while `run` does. `mkdir`
+ * either makes it or finds it, atomically, whichever process asks; one older
+ * than any edit takes is a run that died holding it.
+ */
+async function locked<T>(name: string, run: () => Promise<T>): Promise<T> {
+  const { mkdir, rmdir, stat } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = `${tmpdir()}/keel-vault-${name.replace(/[^A-Za-z0-9_-]/g, "_")}.lock`;
+  for (;;) {
+    try {
+      await mkdir(path);
+      break;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "EEXIST") throw error;
+      const since = await stat(path).then(
+        (found) => Date.now() - found.mtimeMs,
+        () => 0,
+      );
+      if (since > 300_000) await rmdir(path).catch(() => undefined);
+      else await new Promise((wake) => setTimeout(wake, 250));
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    await rmdir(path).catch(() => undefined);
+  }
+}
+
+async function edit(vault: string, item: string, field: string, value: string): Promise<void> {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const exec = promisify(execFile);
   const assignment = `${field}[password]=${value}`;
-  const stderr = (error: unknown): string => String((error as { stderr?: string }).stderr ?? "");
+  // What `op` said, without the value should it quote the assignment back.
+  const stderr = (error: unknown): string =>
+    (value === ""
+      ? String((error as { stderr?: string }).stderr ?? "")
+      : String((error as { stderr?: string }).stderr ?? "")
+          .split(value)
+          .join("***")
+    ).trim();
   for (let pauseMs = 2000; ; pauseMs *= 2) {
     try {
       await exec("op", ["item", "edit", item, "--vault", vault, assignment]);
@@ -91,7 +161,7 @@ export async function writeField(
         }
       }
       if (DEFINITE.test(said) || pauseMs > 16000) {
-        throw new Error(`${item}/${field} could not be written: ${said.trim() || "op failed"}`);
+        throw new Error(`${item}/${field} could not be written: ${said || "op failed"}`);
       }
       await new Promise((wake) => setTimeout(wake, pauseMs));
     }
