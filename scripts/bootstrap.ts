@@ -37,7 +37,8 @@ import { spawn, spawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { dotenv, repo } from "./dotenv";
+import { repo } from "./dotenv";
+import { pulumiEnv } from "./stack";
 
 const argv = process.argv.slice(2);
 
@@ -50,10 +51,10 @@ if (stack === undefined || stack.startsWith("-")) {
 
 const pulumiBin = fileURLToPath(new URL("node_modules/.bin/pulumi", repo));
 const cwd = fileURLToPath(repo);
-// The state export only needs the passphrase, so it goes straight to the CLI —
-// `scripts/pulumi.ts` would warm the vault and read the Cloudflare token first,
-// which is a Touch ID prompt to answer a question about a local file.
-const env = { ...dotenv(), ...process.env };
+// The state export only needs the passphrase, so it goes straight to the CLI
+// rather than through `scripts/pulumi.ts`, which also reads the Cloudflare
+// token. The phases below inherit the passphrase, so it is read once.
+const env = await pulumiEnv();
 
 const exported = spawnSync(pulumiBin, ["stack", "export", "-s", stack], {
   cwd,
