@@ -17,7 +17,7 @@
  * drifting into naming different clients.
  */
 
-import type { SecretRef, SetupContext } from "../spec";
+import type { SetupContext } from "../spec";
 
 /**
  * What one client's four facts are called in its own environment. The house's
@@ -101,6 +101,9 @@ export function oidcClientEnv(
  * is has to be handed in — a `secretEnv` entry is static, resolved before any
  * role is, so the provider cannot be asked at the point the reference is built.
  */
-export function oidcClientSecretRef(identityItem: string, clientId: string): SecretRef {
+export function oidcClientSecretRef(
+  identityItem: string,
+  clientId: string,
+): { item: string; field: string } {
   return { item: identityItem, field: `${clientId.replace(/-/g, "_")}_client_secret` };
 }

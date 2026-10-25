@@ -3,9 +3,10 @@
  *
  * The dashboard reads the hub's API and needs a login for it. Every other
  * credential in this repository is read out of 1Password and sealed for the
- * host; this one is not, because keel makes **no vault writes** — a generated
- * secret that had to be stored would have needed one, and there is nothing here
- * that could put it there. So the password is created inside `create`, sealed
+ * host; this one is not, because a password this deploy generates and no person
+ * types needs no home in the vault — the only vault writes keel makes are the
+ * secrets an identity provider mints for its clients, which other boards read
+ * there. So the password is created inside `create`, sealed
  * for the host's age identity in the same call, and returned as ciphertext. It
  * exists in exactly two places: the hub's own database and one blob on the
  * board. Not in a vault, not in the state file, not in a log line, and not in

@@ -13,8 +13,8 @@
  * configuration keys are drawn by `@pulumi/random` and sealed for the board, so
  * the checkpoint holds them under the stack passphrase; this token is a
  * `pulumi.secret` output, held the same way. There is no alternative. The token
- * is minted by the server and shown exactly once, and keel makes no vault
- * writes — so the choice is state or nowhere, and nowhere means every later
+ * is minted by the server and shown exactly once, and only the deploy reads
+ * it — so the choice is state or nowhere, and nowhere means every later
  * call needs a person to paste something. `state/` is gitignored and
  * Syncthing-carried, and the stack passphrase is what stands between it and
  * this token, the same trade the coordinator's store key already makes.

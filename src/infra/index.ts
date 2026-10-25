@@ -35,6 +35,7 @@ import {
   fleetCatalog,
   fleetServices,
   isRouted,
+  oidcRegistrations,
   orderServices,
   placedRemotes,
   publicRecords,
@@ -70,6 +71,7 @@ import KeelBackup from "./keelBackup";
 import CifsMount from "./mount";
 import declareMesh from "./netbird";
 import { ImageDigest } from "./providers/imageDigest";
+import { KanidmAdmin, KanidmClient } from "./providers/kanidmClient";
 import { BootstrapAccount, BootstrapConnector } from "./providers/netbirdAccount";
 import { PacketFilter } from "./providers/packetFilter";
 import { RemoteFile } from "./providers/remoteFile";
@@ -389,6 +391,14 @@ const forwardFile = new RemoteFile("nft-forward-open", {
  * a name the engine is left to schedule around.
  */
 const services = new Map<string, Service>();
+
+/**
+ * The OAuth2 clients the identity provider on this board registers, by the entry
+ * that signs people in as each. Filled when the loop reaches the provider, which
+ * every client here depends on, so a client's sealed environment can wait for
+ * the registration that writes its secret.
+ */
+const registrations = new Map<string, KanidmClient>();
 for (const spec of ordered) {
   // A rolling tag becomes a resource that resolves it; a pinned one passes
   // straight through, so a digest nobody is going to move costs no lookup and no
@@ -445,7 +455,11 @@ for (const spec of ordered) {
             ...sealedFields(item, secretFields(spec)),
             ageRecipient,
           },
-          { dependsOn: needs },
+          // A client's secret is written by its registration, on a first deploy
+          // in this same run.
+          {
+            dependsOn: [...needs, ...[registrations.get(spec.name)].filter((r) => r !== undefined)],
+          },
         )
       : undefined;
 
@@ -502,6 +516,57 @@ for (const spec of ordered) {
     },
   );
   services.set(spec.name, service);
+
+  // The identity provider registers every client the fleet declares — the board
+  // it runs on is the one that reaches it on loopback, and a client on another
+  // board reads the secret from the vault once this has run. Its admin password
+  // is recovered first when the vault has none.
+  if (catalog.identity !== undefined && catalog.identity.spec.name === spec.name) {
+    const { admin: adminRole } = catalog.identity.role;
+    const identityItem = spec.vaultItem ?? spec.name;
+    const admin = new KanidmAdmin(
+      `${spec.name}-admin`,
+      {
+        host: sshTarget,
+        sshArgs,
+        container: spec.name,
+        recover: adminRole.recover,
+        vault,
+        item: identityItem,
+        field: adminRole.passwordField,
+      },
+      { dependsOn: [service] },
+    );
+    const fleetSpecs = fleetServices(INSTALLATION, SERVICES);
+    for (const client of oidcRegistrations(fleetSpecs, identityItem, INSTALLATION.network.domain)) {
+      registrations.set(
+        client.service,
+        new KanidmClient(
+          `${client.service}-oidc-client`,
+          {
+            host: sshTarget,
+            sshArgs,
+            port: spec.port,
+            vault,
+            admin: {
+              account: adminRole.account,
+              item: identityItem,
+              field: adminRole.passwordField,
+            },
+            clientId: client.id,
+            displayName: client.displayName,
+            landing: client.landing,
+            redirects: client.redirects,
+            scopeMap: client.scopeMap,
+            groups: client.groups,
+            pkce: client.pkce,
+            secret: client.secret,
+          },
+          { dependsOn: [admin] },
+        ),
+      );
+    }
+  }
 }
 
 /**

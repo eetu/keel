@@ -40,6 +40,7 @@
 
 import { KANIDM_IDENTITY } from "../adapters/kanidm";
 import {
+  CALLBACK_PATH as GATE_CALLBACK_PATH,
   gateRole,
   OAUTH2_TEMPLATES_DIR,
   SIGN_IN_TEMPLATE_PATH,
@@ -320,6 +321,8 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
       // the client's.
       OAUTH2_PROXY_CLIENT_SECRET: { item: "kanidm", field: "oauth2_proxy_client_secret" },
     },
+    // Registered by the identity provider's board, which writes that secret.
+    oidcClient: { redirectPaths: [GATE_CALLBACK_PATH] },
     // It runs an OIDC client of its own and fetches the issuer's discovery
     // document at startup, exiting when it cannot — so the issuer answers before
     // this starts. Written rather than derived: `auth` says how this service's

@@ -15,6 +15,7 @@
  * match.
  */
 
+import { oidcClientSecretRef } from "./templates/oidcClient";
 import type { Installation, Network, ServiceFile, ServiceMemory, ServiceSecretFile } from "./types";
 
 export type Egress =
@@ -213,7 +214,50 @@ export type ProxyRole = {
 export type IdentityRole = {
   /** The issuer an OAuth2 client asks, from the provider's origin and the client id. */
   issuer: (origin: string, clientId: string) => string;
+  /**
+   * What the deploy registers clients as: the administrative account, the field
+   * on the provider's own vault item holding its password — named, never valued
+   * — and the command, run inside the provider's container, that resets that
+   * password and prints the new one as `{"status": "ok", "output": "<password>"}`
+   * for a fresh installation whose vault has none yet.
+   */
+  admin: { account: string; passwordField: string; recover: readonly string[] };
 };
+
+/**
+ * An OAuth2 client of the identity provider, registered by the deploy.
+ *
+ * The provider generates the client's secret and it cannot be set from outside,
+ * so the registration writes it into the vault field the client already reads —
+ * the provider's item, `<client id>_client_secret` — and a client on another
+ * board reads it there once the identity provider's board has been deployed.
+ */
+export type OidcClientSpec = {
+  /** The registered client id. Defaults to the entry's name. */
+  id?: string;
+  /** Where a browser may be sent back to, as paths under the entry's own origin. */
+  redirectPaths: readonly string[];
+  /**
+   * Who may sign in and what each is told: group -> scopes. A person in none of
+   * these groups is refused by the provider before the client sees them.
+   * Defaults to every person, with `openid profile email`.
+   */
+  scopeMap?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * Groups this client brings, with their members, as the exact set: the deploy
+   * creates a missing one and sets its members to these. Built-in groups, such
+   * as every person's, are only ever named in `scopeMap`.
+   */
+  groups?: Readonly<Record<string, readonly string[]>>;
+  /** Off for a client that cannot do PKCE. On by default. */
+  pkce?: boolean;
+};
+
+/** Everyone with a person account, which is who a client admits unless it says otherwise. */
+export const EVERY_PERSON = "idm_all_persons";
+
+/** What a client is told about a person unless it asks for more. */
+export const DEFAULT_SCOPES = ["openid", "profile", "email"] as const;
 
 /**
  * The edge session gate a route with `auth: "edge"` is sent through.
@@ -893,10 +937,17 @@ export type ServiceSpec = {
    * answers with is what every later call against this service authenticates as.
    *
    * It is the one credential in this repository that lands in Pulumi state: the
-   * server mints it and this repository makes no vault writes, so there is
-   * nowhere else to put it. See `src/infra/providers/netbirdAccount.ts`.
+   * server mints it and nothing but the deploy reads it, so there is nowhere
+   * better to put it. See `src/infra/providers/netbirdAccount.ts`.
    */
   bootstrapAccount?: BootstrapAccount;
+  /**
+   * The OAuth2 client this service signs people in as. Declaring it is what has
+   * the identity provider's board register it — redirects, who may sign in,
+   * the groups it brings — and put the secret the provider generates into the
+   * vault field the service reads. See `src/infra/providers/kanidmClient.ts`.
+   */
+  oidcClient?: OidcClientSpec;
   /**
    * The half of this service's configuration that names the installation. It is
    * declared on the entry so that a service is one entry: nothing outside the
@@ -1738,6 +1789,54 @@ export function serviceOrigin(spec: ServiceSpec, domain: string): string {
   const subdomain = subdomainOf(spec);
   if (subdomain === null) throw new Error(`${spec.name} has no vhost to build a URL from`);
   return `https://${subdomain}.${domain}`;
+}
+
+/** One client as the identity provider's board registers it: every URL resolved. */
+export type OidcRegistration = {
+  /** The entry that signs people in as this client. */
+  service: string;
+  id: string;
+  displayName: string;
+  /** The entry's own origin, where the provider's app list links. */
+  landing: string;
+  redirects: readonly string[];
+  scopeMap: Readonly<Record<string, readonly string[]>>;
+  groups: Readonly<Record<string, readonly string[]>>;
+  pkce: boolean;
+  /** Where the generated secret lands: the field the client's entry reads. */
+  secret: { item: string; field: string };
+};
+
+/**
+ * Every client the fleet declares, for the board that runs the identity
+ * provider: each entry's URLs built from its own vhost, so moving a vhost moves
+ * its redirects, and the secret's field named the way `oidcClientSecretRef`
+ * names it on the provider's item.
+ */
+export function oidcRegistrations(
+  specs: readonly ServiceSpec[],
+  identityItem: string,
+  domain: string,
+): readonly OidcRegistration[] {
+  return specs.flatMap((spec) => {
+    const client = spec.oidcClient;
+    if (client === undefined) return [];
+    const origin = serviceOrigin(spec, domain);
+    const id = client.id ?? spec.name;
+    return [
+      {
+        service: spec.name,
+        id,
+        displayName: spec.description,
+        landing: origin,
+        redirects: client.redirectPaths.map((path) => `${origin}${path}`),
+        scopeMap: client.scopeMap ?? { [EVERY_PERSON]: DEFAULT_SCOPES },
+        groups: client.groups ?? {},
+        pkce: client.pkce ?? true,
+        secret: oidcClientSecretRef(identityItem, id),
+      },
+    ];
+  });
 }
 
 /**

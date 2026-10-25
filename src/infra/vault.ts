@@ -1,5 +1,5 @@
 /**
- * Reading secrets out of 1Password.
+ * Reading secrets out of 1Password, and writing the ones a server generates.
  *
  * The single place a plaintext secret exists in this repo's execution, and it
  * exists only in memory: the caller seals it for the target host immediately and
@@ -38,6 +38,60 @@ export async function readField(vault: string, item: string, field: string): Pro
     } catch (error) {
       const said = String((error as { stderr?: string }).stderr ?? "");
       if (DEFINITE.test(said) || pauseMs > 16000) return "";
+      await new Promise((wake) => setTimeout(wake, pauseMs));
+    }
+  }
+}
+
+/**
+ * Writes a field the deploy is the source of: a credential a server generates
+ * and nobody can set — an OAuth2 client's secret, the password recovering an
+ * administrative account printed. The item is created when it is not there.
+ *
+ * The value rides as an argument, in `op item edit`'s assignment form, which
+ * changes one field without restating the item: it is in this machine's process
+ * list for the length of the call and written nowhere. A failure names the
+ * field and what `op` said, never the command line, which holds the value.
+ * Retried as a read is, since the same Touch ID prompt is what it races.
+ */
+export async function writeField(
+  vault: string,
+  item: string,
+  field: string,
+  value: string,
+): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  const assignment = `${field}[password]=${value}`;
+  const stderr = (error: unknown): string => String((error as { stderr?: string }).stderr ?? "");
+  for (let pauseMs = 2000; ; pauseMs *= 2) {
+    try {
+      await exec("op", ["item", "edit", item, "--vault", vault, assignment]);
+      return;
+    } catch (error) {
+      const said = stderr(error);
+      if (/isn't an item/i.test(said)) {
+        try {
+          await exec("op", [
+            "item",
+            "create",
+            "--vault",
+            vault,
+            "--category",
+            "Secure Note",
+            "--title",
+            item,
+            assignment,
+          ]);
+          return;
+        } catch (created) {
+          throw new Error(`${item}/${field}: the item could not be created: ${stderr(created)}`);
+        }
+      }
+      if (DEFINITE.test(said) || pauseMs > 16000) {
+        throw new Error(`${item}/${field} could not be written: ${said.trim() || "op failed"}`);
+      }
       await new Promise((wake) => setTimeout(wake, pauseMs));
     }
   }

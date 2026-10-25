@@ -22,7 +22,7 @@ const SIGN_IN_PATH = "/oauth2/sign_in";
 /** Begins the OIDC flow. What the sign-in page submits itself to. */
 const START_PATH = "/oauth2/start";
 /** Where the identity provider sends the browser back, and so the client's redirect URI. */
-const CALLBACK_PATH = "/oauth2/callback";
+export const CALLBACK_PATH = "/oauth2/callback";
 
 /**
  * How the gate refuses. It answers a forward-auth query for an unauthenticated

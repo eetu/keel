@@ -101,6 +101,8 @@ describe("the expansion is written down", () => {
       // `U` because the image runs as uid 1000 and the unit makes the directory as root.
       mounts: ["/var/lib/atlas:/data:Z,U"],
       backup: true,
+      // Registered by the identity provider's board, which writes the secret above.
+      oidcClient: { redirectPaths: ["/auth/callback"] },
     };
     expect(stamped).toEqual(literal);
     // Compared apart because it is a function: what it returns is the next test.
