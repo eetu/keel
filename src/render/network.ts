@@ -51,6 +51,17 @@ export function renderNetwork(): Tree {
       // whatever it would have been. Verified on the board both ways.
       "[connection]\nipv6.addr-gen-mode=0\n",
     ),
+    // No IPv4 address conflict detection: the router's reservation is the
+    // authority on this board's address, and a probe answered by anything else
+    // makes the board decline it and take the next lease from the pool. A
+    // router restart drops carrier, NetworkManager redoes DHCP from scratch, and
+    // the probe for the reserved address can be answered by another device on
+    // the LAN — one that also sends IPv6 router advertisements did exactly that,
+    // and the board spent thirteen hours on a pool address while every name and
+    // forward pointed at the reserved one. Nothing reserved to this MAC is
+    // legitimately someone else's, so the probe can only ever move the board
+    // away from where it belongs.
+    file("/etc/NetworkManager/conf.d/20-keel-no-acd.conf", "[connection]\nipv4.dad-timeout=0\n"),
     // Joined, not dedented: dedent takes its indent from the least-indented line,
     // and an interpolated list has none — leaving every other line indented, which
     // glibc ignores.
