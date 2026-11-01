@@ -283,10 +283,18 @@ export function renderQuadlet(
           //
           // The startup check keeps the fast path: it runs at 5s until it
           // passes, and `HealthStartupSuccess` defaults to 0, which podman
-          // documents as any success immediately starting the regular check.
+          // documents as any success immediately starting the regular check —
+          // on the Pi 4 a unit goes active 14–18 s after its container starts,
+          // so the regular interval is never what a start job waits on.
+          //
+          // After that the result is read by nothing: no `HealthOnFailure=`, and
+          // the alert poller reports failed units, not unhealthy containers. It
+          // is `podman ps`'s status column, and at 60s seven of them were a
+          // `podman` exec every nine seconds on a board whose page cache cannot
+          // hold its own services.
           `HealthStartupCmd=${spec.healthCmd}`,
           "HealthStartupInterval=5s",
-          "HealthInterval=60s",
+          "HealthInterval=5m",
           "HealthStartPeriod=10s",
           "Notify=healthy",
         ]

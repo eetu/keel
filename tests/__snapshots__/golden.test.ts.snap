@@ -35,7 +35,7 @@ Environment=KANIDM_DOMAIN=idm.example.test
 HealthCmd=CMD /sbin/kanidmd scripting healthcheck
 HealthStartupCmd=CMD /sbin/kanidmd scripting healthcheck
 HealthStartupInterval=5s
-HealthInterval=60s
+HealthInterval=5m
 HealthStartPeriod=10s
 Notify=healthy
 
@@ -220,7 +220,7 @@ Environment=FTLCONF_webserver_api_password=
 HealthCmd=dig +norecurse +retry=0 @127.0.0.1 pi.hole
 HealthStartupCmd=dig +norecurse +retry=0 @127.0.0.1 pi.hole
 HealthStartupInterval=5s
-HealthInterval=60s
+HealthInterval=5m
 HealthStartPeriod=10s
 Notify=healthy
 ReloadCmd=pihole reloaddns
@@ -330,7 +330,7 @@ EnvironmentFile=/etc/secrets/traefik.env
 HealthCmd=wget -q -O /dev/null http://127.0.0.1:9080/ping
 HealthStartupCmd=wget -q -O /dev/null http://127.0.0.1:9080/ping
 HealthStartupInterval=5s
-HealthInterval=60s
+HealthInterval=5m
 HealthStartPeriod=10s
 Notify=healthy
 
