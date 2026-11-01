@@ -128,6 +128,9 @@ export type ServiceArgs = {
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
+/** The type token, which is part of the URN of every resource beneath the component. */
+export const SERVICE_TYPE = "keel:index:Service";
+
 export default class Service extends pulumi.ComponentResource {
   /** `/var/lib/<name>`, when the service has state worth restoring. */
   public readonly backupPath: string | undefined;
@@ -155,7 +158,7 @@ export default class Service extends pulumi.ComponentResource {
       ageRecipient,
       sshArgs,
     } = args;
-    super("keel:index:Service", spec.name, {}, opts);
+    super(SERVICE_TYPE, spec.name, {}, opts);
     const parent = { parent: this };
 
     // A preview has no digest for a rolling tag — the resource that resolves one
@@ -366,7 +369,9 @@ export default class Service extends pulumi.ComponentResource {
             content: route,
             mode: "644",
           },
-          parent,
+          // The same file the proxy's board wrote as a remote's route while this
+          // service ran elsewhere — see the remote routes in index.ts.
+          { ...parent, aliases: [{ parent: pulumi.rootStackResource }] },
         );
       }
     }
