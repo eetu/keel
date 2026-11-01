@@ -78,7 +78,7 @@ import { RemoteFile } from "./providers/remoteFile";
 import { SealedEnv } from "./providers/sealedEnv";
 import { SecretFile } from "./providers/secretFile";
 import { SystemdUnit } from "./providers/systemdUnit";
-import Service from "./service";
+import Service, { SERVICE_TYPE } from "./service";
 import { zoneRecordKey, zoneRecordName } from "./zoneRecords";
 
 const config = new pulumi.Config();
@@ -671,19 +671,29 @@ for (const spec of mine) {
  * nothing: a route file needs nothing running to be written, the same as a
  * service's own. A host has remotes only when it runs the proxy, so there is
  * always a watched directory to write into.
+ *
+ * A service moved off the proxy's board keeps its route's path but loses the
+ * `Service` that parented it, so without the alias the new route is a second
+ * resource on the same file: Pulumi creates it, then deletes the old one last,
+ * and the delete removes the file — the vhost answered 404 behind a clean `up`.
+ * Aliased, the move is an update of one file; `Service` aliases the other way.
  */
 for (const remote of catalog.remotes) {
-  new RemoteFile(`${remote.name}-route`, {
-    host: sshTarget,
-    sshArgs,
-    path: catalog.proxy!.role.routePath(remote),
-    content: catalog.proxy!.role.route(remote, {
-      domain: INSTALLATION.network.domain,
-      publicHosts: INSTALLATION.publicHosts,
-      gate: catalog.gate,
-    })!,
-    mode: "644",
-  });
+  new RemoteFile(
+    `${remote.name}-route`,
+    {
+      host: sshTarget,
+      sshArgs,
+      path: catalog.proxy!.role.routePath(remote),
+      content: catalog.proxy!.role.route(remote, {
+        domain: INSTALLATION.network.domain,
+        publicHosts: INSTALLATION.publicHosts,
+        gate: catalog.gate,
+      })!,
+      mode: "644",
+    },
+    { aliases: [{ parent: pulumi.createUrn(remote.name, SERVICE_TYPE) }] },
+  );
 }
 
 /**
