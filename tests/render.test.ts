@@ -132,10 +132,14 @@ describe("the image describes no network and no host", () => {
       // installs what runs on it. So the image stages nothing for a service — no
       // quadlet, no unit, no memory drop-in, no state directory, no promise in
       // the selftest — which in its general form is that a service's name occurs
-      // nowhere in the tree.
+      // nowhere in the tree. As a whole identifier: a short name like `kb` is
+      // not named by the kernel's `read_ahead_kb`.
+      const named = new RegExp(
+        `(?<!\\w)${spec.name.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")}(?!\\w)`,
+      );
       for (const [path, entry] of tree) {
-        expect(path, path).not.toContain(spec.name);
-        expect(entry.content, path).not.toContain(spec.name);
+        expect(path, path).not.toMatch(named);
+        expect(entry.content, path).not.toMatch(named);
       }
     },
   );

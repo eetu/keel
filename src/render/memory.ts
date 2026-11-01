@@ -247,9 +247,34 @@ function zram(): Tree {
 }
 
 /**
+ * Readahead on a USB disk, put back to the kernel's own default.
+ *
+ * The kernel sizes a disk's readahead at twice the optimal transfer size the
+ * device reports, and a USB–SATA bridge that reports the field's maximum
+ * (65535 sectors) gets `read_ahead_kb=65532` — a 64 MB window around every cold
+ * page fault on a board with 862 MB. Every service here is a binary the kernel
+ * keeps evicting and faulting back, so the window is paid on each refault.
+ * Measured on the Pi 4's SSD: 128 KB read ~470 MB/min against ~650 at 64 MB.
+ * The refault rate itself did not move; that is the board's working set, and no
+ * readahead value fixes it.
+ *
+ * Whole disks only, since a partition has no queue of its own; `change` as well
+ * as `add`, because a revalidation recomputes the window from the device's
+ * figure. An SD card reports none and already has the default.
+ */
+function readahead(): Tree {
+  return file(
+    "/usr/lib/udev/rules.d/60-keel-readahead.rules",
+    dedent(`
+      ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]", ENV{DEVTYPE}=="disk", ATTR{queue/read_ahead_kb}="128"
+    `),
+  );
+}
+
+/**
  * Everything memory-related the image owns: the two slices and their per-profile
  * budgets, the caps for the services the image itself runs, the generator that
- * picks a profile, and zram.
+ * picks a profile, zram, and the disk's readahead.
  *
  * A service the deploy layer runs is not here. Pulumi knows the board's RAM, so
  * it writes that service's drop-in itself when it writes the quadlet — one
@@ -264,5 +289,6 @@ export function renderMemory(): Tree {
     merge(...Object.keys(IMAGE_SERVICES).map((service) => nativeDropIn(service))),
     generator(),
     zram(),
+    readahead(),
   );
 }
