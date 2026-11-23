@@ -98,7 +98,7 @@ export const EXAMPLE_SERVICES: readonly ServiceSpec[] = [
     name: "traefik",
     description: "TLS terminator and the only listener facing the LAN",
     image:
-      "docker.io/library/traefik:v3.7.19@sha256:aa942a00bce033c909bf1f7e861d93761be4b31a035f10d2410d33e38a8f41cf",
+      "docker.io/library/traefik:v3.7.19@sha256:a6c0194dda77bcb804824580f36fa7edc56e315b1acfe933366c8b52844a78a4",
     // What it binds on the host. Every other service's port is a loopback
     // upstream behind this one.
     port: 443,
